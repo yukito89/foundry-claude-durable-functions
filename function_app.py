@@ -89,7 +89,7 @@ def initialize_client():
         )
 
 # LLMサービスを呼び出す共通関数
-def call_llm(system_prompt: str, user_prompt: str, max_retries: int = 5) -> str:
+def call_llm(system_prompt: str, user_prompt: str, max_retries: int = 10) -> str:
     """
     指定されたLLMサービス（AzureまたはAWS）を使ってプロンプトを送信し、応答を取得する。
     system_prompt: システムプロンプト（モデルの振る舞いを定義）
@@ -139,7 +139,8 @@ def call_llm(system_prompt: str, user_prompt: str, max_retries: int = 5) -> str:
             # ThrottlingExceptionの場合はリトライ
             if "ThrottlingException" in error_message or "Too many requests" in error_message:
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + (attempt * 2)  # エクスポネンシャルバックオフ
+                    # エクスポネンシャルバックオフ
+                    wait_time = min((2 ** attempt) * 3 + (attempt * 5), 120)  # 最大120秒
                     logging.warning(f"{llm_service} API レート制限エラー。{wait_time}秒後にリトライします（{attempt + 1}/{max_retries}）")
                     time.sleep(wait_time)
                     continue
