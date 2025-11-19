@@ -1,5 +1,13 @@
 """
 LLMプロンプト定義
+
+このファイルには、各処理ステップで使用するLLMプロンプトを定義しています。
+- STRUCTURING_PROMPT: ExcelデータをMarkdownに構造化
+- EXTRACT_TEST_PERSPECTIVES_PROMPT: テスト観点の抽出
+- CREATE_TEST_SPEC_PROMPT_SIMPLE/DETAILED: テスト仕様書の生成（粒度別）
+- DIFF_DETECTION_PROMPT: 設計書の差分検知
+- EXTRACT_TEST_PERSPECTIVES_PROMPT_WITH_DIFF: 差分考慮のテスト観点抽出
+- CREATE_TEST_SPEC_PROMPT_WITH_DIFF: 差分考慮のテスト仕様書生成
 """
 
 STRUCTURING_PROMPT = '''
@@ -58,8 +66,9 @@ EXTRACT_TEST_PERSPECTIVES_PROMPT = '''
 - 出力形式はMarkdown
 '''
 
-# テスト仕様書生成プロンプト（粒度別）
+# --- テスト仕様書生成プロンプト（粒度別） ---
 
+# シンプルモード: 簡潔なテストケースを生成
 CREATE_TEST_SPEC_PROMPT_SIMPLE = '''
 あなたはソフトウェア品質保証の専門家です。
 提供された設計書とテスト観点をもとに、実務レベルのテスト仕様書を作成してください。
@@ -96,6 +105,7 @@ CREATE_TEST_SPEC_PROMPT_SIMPLE = '''
 - 語尾の不統一
 '''
 
+# 詳細モード: 実行可能な詳細なテストケースを生成
 CREATE_TEST_SPEC_PROMPT_DETAILED = '''
 あなたはソフトウェア品質保証（QA）の専門家です。
 提供された設計書とテスト観点をもとに、実務でそのまま実行可能な単体テスト仕様書を作成してください。
@@ -139,7 +149,9 @@ Markdown表形式（6列構成）：
 - 複数ある場合は<br>タグで区切る（例: 画面仕様書_2.1:ログイン画面<br>API仕様書_3.2:認証API）
 '''
 
-# 差分検知プロンプト
+# --- 差分モード用プロンプト ---
+
+# 旧版と新版の設計書を比較して変更点を抽出
 DIFF_DETECTION_PROMPT = '''
 あなたは設計書の変更分析の専門家です。
 
@@ -168,7 +180,7 @@ DIFF_DETECTION_PROMPT = '''
 - 影響範囲は依存関係を考慮して記載
 '''
 
-# テスト観点抽出プロンプト（差分対応版）
+# 変更差分を考慮したテスト観点の抽出
 EXTRACT_TEST_PERSPECTIVES_PROMPT_WITH_DIFF = '''
 あなたはソフトウェアテストの専門家です。
 設計書とその変更差分をもとに、テスト観点を抽出してください。
@@ -201,7 +213,7 @@ EXTRACT_TEST_PERSPECTIVES_PROMPT_WITH_DIFF = '''
 - 出力形式はMarkdown
 '''
 
-# テスト仕様書生成プロンプト（差分対応版）
+# 変更差分と旧版仕様書を考慮したテスト仕様書の生成
 CREATE_TEST_SPEC_PROMPT_WITH_DIFF = '''
 あなたはソフトウェア品質保証の専門家です。
 
