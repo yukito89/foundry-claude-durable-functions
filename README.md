@@ -2,7 +2,7 @@
 
 このアプリケーションは、Excel形式の設計書をアップロードすると、LLM（大規模言語モデル）を利用して構造化された設計書、テスト観点、そして単体テスト仕様書を自動生成するAzure Functionsアプリケーションです。
 
-バックエンドのLLMは、設定によって **AWS Bedrock** と **Azure OpenAI Service** を切り替えて使用することができます。
+バックエンドのLLMは、**Azure AI Foundry** 経由で **Claude Sonnet 4.5** を使用します。
 
 ## 主な機能
 
@@ -22,9 +22,7 @@
 - [環境構築](#環境構築)
 - [設定](#設定)
   - [.envファイル](#envファイル)
-  - [LLMサービスの選択](#llmサービスの選択)
-  - [AWS Bedrockの設定](#aws-bedrockの設定)
-  - [Azure OpenAIの設定](#azure-openaiの設定)
+  - [Azure AI Foundryの設定](#azure-ai-foundryの設定)
 - [ローカルでの実行](#ローカルでの実行)
 - [Azureへのデプロイ](#azureへのデプロイ)
 - [主要ファイル構成](#主要ファイル構成)
@@ -37,13 +35,13 @@
 ### システム全体構成
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   フロントエンド │    │   バックエンド   │    │   LLMサービス    │
-│                 │    │                 │    │                 │
-│ Azure Static    │───▶│ Azure Functions │───▶│ AWS Bedrock     │
-│ Web Apps        │    │                 │    │ または          │
-│                 │    │                 │    │ Azure OpenAI    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────────┐
+│   フロントエンド │    │   バックエンド   │    │   LLMサービス        │
+│                 │    │                 │    │                     │
+│ Azure Static    │───▶│ Azure Functions │───▶│ Azure AI Foundry    │
+│ Web Apps        │    │                 │    │ (Claude Sonnet 4.5) │
+│                 │    │                 │    │                     │
+└─────────────────┘    └─────────────────┘    └─────────────────────┘
 ```
 
 ### モジュール構成
@@ -79,16 +77,17 @@ testgen-unit-diff/
 4. **テスト仕様書生成**: 旧版テスト仕様書を参考に差分版を生成
 5. **成果物変換・ZIP作成**: 通常モードと同様
 
-### LLMサービス抽象化
+### LLMサービス
 
-`core/llm_service.py`でAWS BedrockとAzure OpenAIを統一インターフェースで利用：
+`core/llm_service.py`でAzure AI Foundry経由でClaude Sonnet 4.5を利用：
 
 ```python
-# 環境変数LLM_SERVICEで切り替え
-if LLM_SERVICE == "AWS":
-    # AWS Bedrock (Claude Sonnet)
-else:
-    # Azure OpenAI (GPT-4)
+from anthropic import AnthropicFoundry
+
+client = AnthropicFoundry(
+    api_key=foundry_api_key,
+    base_url=foundry_endpoint
+)
 ```
 
 ---
@@ -98,8 +97,7 @@ else:
 - [Python 3.11](https://www.python.org/downloads/release/python-3110/)
 - [Visual Studio Code](https://code.visualstudio.com/)
 - [Node.js 18.x 以降](https://nodejs.org/) （Azure Functions Core Toolsのインストールに必要）
-- [AWS アカウント](https://aws.amazon.com/jp/) （Bedrock利用時）
-- [Azure アカウント](https://azure.microsoft.com/ja-jp/) （Azure OpenAI利用時、またはAzureへのデプロイ時）
+- [Azure アカウント](https://azure.microsoft.com/ja-jp/) （Azure AI FoundryおよびAzureへのデプロイに必要）
 
 ---
 
@@ -241,121 +239,65 @@ copy .env.example .env
 
 **注意:** `.env`ファイルには認証情報などの機密情報が含まれるため、絶対にGitでコミットしないでください。`.gitignore`に`.env`が記載されていることを確認してください。
 
-### LLMサービスの選択
+### Azure AI Foundryの設定
 
-`.env`ファイル内の`LLM_SERVICE`で使用するサービスを指定します。
+2025年11月18日にMicrosoftとAnthropicが提携し、Azure AI FoundryでClaude Sonnet 4.5が利用可能になりました。以下の手順で設定を行います。
 
-- **AWS Bedrockを利用する場合:**
-  ```
-  LLM_SERVICE="AWS"
-  ```
-- **Azure OpenAI Serviceを利用する場合:**
-  ```
-  LLM_SERVICE="AZURE"
-  ```
+#### 1. Azure AI Foundryプロジェクトの作成
 
-### AWS Bedrockの設定
+1. [Azure AI Foundry](https://ai.azure.com/)にアクセスし、Azureアカウントでサインインします。
+2. 新しいプロジェクトを作成します。
+3. プロジェクト設定から「Models + endpoints」を選択します。
 
-`LLM_SERVICE="AWS"`を選択した場合、以下の設定を行います。
+#### 2. Claude Sonnet 4.5のデプロイ
 
-#### 1. モデルアクセスの有効化
+1. 「+ Deploy model」をクリックします。
+2. モデルカタログから「Claude Sonnet 4.5」を検索して選択します。
+3. デプロイ名を設定します（例: `claude-sonnet-4-5`）。
+4. デプロイを完了します。
 
-AWS Bedrockでモデルを利用する前に、使用したいリージョンで対象モデルへのアクセスを有効化する必要があります。
+#### 3. 接続情報の取得
 
-1.  AWSマネジメントコンソールで **Bedrock** サービスに移動します。
-2.  左下のメニューから **「モデルアクセス」** をクリックします。
-3.  右上の **「モデルアクセスを管理」** ボタンをクリックします。
-4.  **Anthropic** の **「Claude Sonnet 4.5」** にチェックを入れ、右下の「変更を保存」をクリックします。
-    - アクセスステータスが「アクセス権が付与されました」に変わるまで数分待ちます。
-
-#### 2. IAMユーザーの作成
-
-このアプリケーション専用のIAMユーザーを作成し、プログラムによるアクセスキー（アクセスキーIDとシークレットアクセスキー）を発行します。
-
-1.  AWSマネジメントコンソールでIAMサービスに移動します。
-2.  「ユーザー」→「ユーザーを作成」をクリックします。
-3.  ユーザー名を指定し、「次へ」をクリックします。
-4.  「ポリシーを直接アタッチする」を選択します。（ポリシーは次のステップで作成します）
-5.  ユーザーを作成後、「セキュリティ認証情報」タブに移動し、「アクセスキーを作成」をクリックします。
-6.  「コマンドラインインターフェイス (CLI)」を選択し、アクセスキーを作成します。
-7.  表示された「アクセスキーID」と「シークレットアクセスキー」をコピーし、`.env`ファイルに設定します。**この画面を閉じるとシークレットアクセスキーは二度と表示できないので注意してください。**
-
-#### 3. IAMポリシーの作成とアタッチ
-
-Bedrockのモデルを呼び出すための権限をまとめたIAMポリシーを作成し、上記で作成したIAMユーザーにアタッチします。
-
-1.  IAMサービスの「ポリシー」→「ポリシーを作成」をクリックします。
-2.  「JSON」タブを選択し、以下のポリシーを貼り付けます。
-
-    ```json
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Action": "bedrock:InvokeModel",
-                "Resource": "*"
-            }
-        ]
-    }
-    ```
-    *本番環境では、`Resource`をより厳密に特定のモデルARNやプロファイルARN (`arn:aws:bedrock:ap-northeast-1:799642483126:inference-profile/jp.anthropic.claude-sonnet-4-5-20250929-v1:0` など) に限定することが推奨されます。*
-
-3.  ポリシーに名前（例: `BedrockAppInvokePolicy`）を付けて保存します。
-4.  作成したIAMユーザーの「許可を追加」から、今作成したポリシーをアタッチします。
-
-推論プロファイルは共有のものを利用するため、自身で作成する必要はありません。
+1. デプロイしたモデルの詳細ページを開きます。
+2. 以下の情報をコピーします：
+   - **エンドポイントURL**: `https://your-foundry.services.ai.azure.com/anthropic/`
+   - **APIキー**: 「Keys and Endpoint」セクションから取得
+   - **デプロイ名**: 設定したデプロイ名
 
 #### 4. .envファイルの設定
 
-日本リージョン用の共有推論プロファイルが用意されているため、それを利用します。
-
 ```.env
-# -------------------- LLMサービスの選択 --------------------
-# 使用するLLMサービスを選択します ("AZURE" or "AWS")
-LLM_SERVICE=AWS
-
-
-# -------------------- AWS Bedrock 接続情報 --------------------
-# AWSリージョン (例: "ap-northeast-1")
-AWS_REGION=ap-northeast-1
-
-# AWSアクセスキーID
-AWS_ACCESS_KEY_ID=<ここにアクセスキーIDを記述>
-
-# AWSシークレットアクセスキー
-AWS_SECRET_ACCESS_KEY=<ここにシークレットアクセスキーを記述>
-
-# AWS BedrockモデルID (例: "jp.anthropic.claude-sonnet-4-5-20250929-v1:0")
-AWS_BEDROCK_MODEL_ID=jp.anthropic.claude-sonnet-4-5-20250929-v1:0
-```
-**注意:** 上記の推論プロファイルは `ap-northeast-1` (東京リージョン) 専用です。他のリージョンで実行する場合は、別途推論プロファイルを作成し、そのARNを指定する必要があります。
-
----
-
-### Azure OpenAIの設定
-
-`LLM_SERVICE="AZURE"`を選択した場合、以下の環境変数を設定します。
-
-```.env
-# -------------------- Azure OpenAI Service 接続情報 --------------------
+# -------------------- Azure AI Foundry (Claude) 接続情報 --------------------
 # APIキー (必須)
-AZURE_OPENAI_API_KEY=<ここにAPIキーを記述>
+AZURE_FOUNDRY_API_KEY=<ここにAPIキーを記述>
 
 # エンドポイント (必須)
-# 例: https://your-service-name.openai.azure.com
-AZURE_OPENAI_ENDPOINT=<ここにエンドポイントを記述>
+# 例: https://your-foundry.services.ai.azure.com/anthropic/
+AZURE_FOUNDRY_ENDPOINT=<ここにエンドポイントを記述>
 
-# APIバージョン (必須)
-# 例: 2024-02-01
-AZURE_OPENAI_API_VERSION=<ここにAPIバージョンを記述>
 
-# デプロイ名 (必須)
-# 例: gpt-4o
-AZURE_OPENAI_DEPLOYMENT=<ここにデプロイ名を記述>
+# -------------------- モデル選択 --------------------
+# 構造化処理用モデル (例: claude-sonnet-4-5)
+MODEL_STRUCTURING=claude-sonnet-4-5
+
+# テスト観点抽出用モデル
+MODEL_TEST_PERSPECTIVES=claude-sonnet-4-5
+
+# テスト仕様書生成用モデル
+MODEL_TEST_SPEC=claude-sonnet-4-5
+
+# 差分検知用モデル
+MODEL_DIFF_DETECTION=claude-sonnet-4-5
 ```
 
-これらの値は、AzureポータルでAzure OpenAI Serviceのリソースを作成し、「キーとエンドポイント」から取得できます。`AZURE_OPENAI_DEPLOYMENT`には、作成したモデルのデプロイ名を指定します。
+**モデル選択について:**
+- 各処理ごとに異なるモデルを指定できます
+- Azure AI Foundryでデプロイしたモデルのデプロイ名を指定します
+- 使い分けの例:
+  - コスト重視: 軽い処理に`gpt-4o-mini`、重い処理に`claude-sonnet-4-5`
+  - 品質重視: 全ての処理に`claude-sonnet-4-5`
+  - バランス型: 構造化・差分検知に`gpt-4o-mini`、テスト生成に`claude-sonnet-4-5`
+- 同じモデルを全てに使用する場合は、全てに同じデプロイ名を設定してください
 
 ---
 
@@ -402,7 +344,7 @@ AZURE_OPENAI_DEPLOYMENT=<ここにデプロイ名を記述>
 4.  **環境変数の設定**
     - Azureポータルで作成したFunction Appを開く
     - 「設定」→「環境変数」→「+追加」→「アプリケーション設定の追加/編集」
-    - `.env`ファイルの内容を1つずつ追加（`LLM_SERVICE`, `AWS_ACCESS_KEY_ID`など）
+    - `.env`ファイルの内容を1つずつ追加（`AZURE_FOUNDRY_API_KEY`, `AZURE_FOUNDRY_ENDPOINT`, `MODEL_STRUCTURING`, `MODEL_TEST_PERSPECTIVES`, `MODEL_TEST_SPEC`, `MODEL_DIFF_DETECTION`）
 
 5.  **関数キーの取得（セキュリティ設定）**
     - AzureポータルでFunction Appを開く
@@ -478,8 +420,7 @@ AZURE_OPENAI_DEPLOYMENT=<ここにデプロイ名を記述>
 ### 1. Pythonライブラリ (`requirements.txt`)
 
 -   `azure-functions`: Azure Functionsのトリガーやバインディングなど、Pythonでの関数開発を可能にするためのコアライブラリ。
--   `boto3`: AWS SDK for Python。AWS Bedrockなど、AWSサービスを呼び出すためのクライアントライブラリ。
--   `openai`: Azure OpenAI ServiceおよびOpenAI APIを呼び出すためのクライアントライブラリ。
+-   `anthropic`: Anthropic Claude APIクライアントライブラリ。Azure AI Foundry経由でClaude Sonnet 4.5を呼び出すために使用。
 -   `python-dotenv`: `.env`ファイルから環境変数を読み込むために使用。ローカル開発で接続情報を管理します。
 -   `pandas`: データ操作とExcelファイルの読み込みに使用。
 -   `openpyxl`: Excelファイルの書き込みと操作に使用。
@@ -503,8 +444,5 @@ AZURE_OPENAI_DEPLOYMENT=<ここにデプロイ名を記述>
 -   **Azure Static Web Apps**:
     静的コンテンツ（HTML、CSS、JavaScript）をホスティングするためのサービス。本プロジェクトのフロントエンドをデプロイします。
 
--   **AWS Bedrock**:
-    Amazon Web Services上で提供される、Claude Sonnetなどの大規模言語モデルを利用するためのマネージドサービス。
-
--   **Azure OpenAI Service**:
-    Microsoft Azure上で提供される、GPTなどの大規模言語モデルを利用するためのサービス。
+-   **Azure AI Foundry**:
+    Microsoft Azure上で提供される、Claude Sonnet 4.5などの大規模言語モデルを利用するためのサービス。2024年11月18日のMicrosoftとAnthropicの提携により利用可能になりました。

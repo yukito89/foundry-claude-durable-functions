@@ -5,6 +5,5 @@
 azure-functions
 pandas
 openpyxl
-openai
+anthropic
 python-dotenv
-boto3
