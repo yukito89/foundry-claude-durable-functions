@@ -33,6 +33,7 @@ modeRadios.forEach(radio => {
     });
 });
 
+// ユーザーがアップロードボタンをクリック
 uploadBtn.addEventListener("click", async () => {
     console.log('アップロードボタンクリック');
     const mode = document.querySelector('input[name="mode"]:checked').value;
@@ -40,6 +41,7 @@ uploadBtn.addEventListener("click", async () => {
     
     const formData = new FormData();
     
+    // 通常モード：設計書のみ
     if (mode === "normal") {
         const files = document.querySelector("#fileInput").files;
         if (files.length === 0) {
@@ -49,7 +51,9 @@ uploadBtn.addEventListener("click", async () => {
         for (let i = 0; i < files.length; i++) {
             formData.append("documentFiles", files[i]);
         }
-    } else {
+    } 
+    // 差分モード：新版設計書 + 旧版MD2つ
+    else {
         const newExcelFiles = document.querySelector("#newExcelFiles").files;
         const oldStructuredMd = document.querySelector("#oldStructuredMd").files;
         const oldTestSpecMd = document.querySelector("#oldTestSpecMd").files;
@@ -82,6 +86,7 @@ uploadBtn.addEventListener("click", async () => {
     progressBar.style.width = "0%";
     progressText.textContent = "処理を開始しています...";
 
+    // エンドポイント選択
     const endpoint = mode === "normal" 
         ? `${API_BASE_URL}/upload`
         : `${API_BASE_URL}/upload_diff`;
@@ -102,7 +107,7 @@ uploadBtn.addEventListener("click", async () => {
         }
         
         const startData = await startRes.json();
-        const instanceId = startData.id;
+        const instanceId = startData.id; // Durable FunctionsのインスタンスID
         currentJobId = instanceId;
         console.log('ジョブ開始:', instanceId);
         
