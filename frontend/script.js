@@ -1,8 +1,8 @@
 console.log('script.js実行開始');
 
 // ==================== 環境設定 ====================
-const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
-// const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
+// const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
+const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
 // ==================================================
 
 const status = document.querySelector("#status");
@@ -86,111 +86,115 @@ uploadBtn.addEventListener("click", async () => {
         ? `${API_BASE_URL}/upload`
         : `${API_BASE_URL}/upload_diff`;
 
-    // ジョブIDを事前に生成
-    const jobId = crypto.randomUUID();
-    currentJobId = jobId;
-    console.log('ジョブID生成:', jobId);
-    
-    // クエリパラメータにジョブIDを追加
-    const endpointWithJobId = `${endpoint}?jobId=${jobId}`;
-
     try {
-        // 先にポーリングを開始
-        setTimeout(() => {
-            console.log('ポーリング開始準備');
-            startPollingWithoutJobId();
-        }, 1000);
-        
-        // 同期処理（ZIPファイルを直接返す）
-        fetch(endpointWithJobId, {
+        // ジョブを開始（即座にinstanceIdを取得）
+        const startRes = await fetch(endpoint, {
             method: "POST",
             body: formData,
-        }).then(async (res) => {
-            if (!res.ok) {
-                stopPolling();
-                progressContainer.style.display = "none";
-                if (res.status === 401 || res.status === 403) {
-                    status.textContent = "アクセスが拒否されました（IP制限）";
-                } else if (res.status === 400) {
-                    const errorText = await res.text();
-                    status.textContent = `入力エラー: ${errorText}`;
-                } else if (res.status === 500) {
-                    status.textContent = "サーバーエラー: 処理中に問題が発生しました";
-                } else {
-                    status.textContent = `エラー: ${res.status}`;
-                }
-                uploadBtn.disabled = false;
-                return;
-            }
-
-            // ファイルダウンロード処理
-            const blob = await res.blob();
-            const contentDisposition = res.headers.get('content-disposition');
-            let filename = mode === "diff" ? 'generated_files_diff.zip' : 'generated_files.zip';
-            if (contentDisposition) {
-                const filenameMatch = contentDisposition.match(/filename\*=UTF-8''(.+)/);
-                if (filenameMatch && filenameMatch.length > 1) {
-                    filename = decodeURIComponent(filenameMatch[1]);
-                } else {
-                    const filenameMatchRegular = contentDisposition.match(/filename="(.+)"/);
-                    if (filenameMatchRegular && filenameMatchRegular.length > 1) {
-                        filename = filenameMatchRegular[1];
-                    }
-                }
-            }
-
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-
-            stopPolling();
-            progressContainer.style.display = "none";
-            status.textContent = "✅ 完了しました";
-            uploadBtn.disabled = false;
-        }).catch((err) => {
-            stopPolling();
-            progressContainer.style.display = "none";
-            status.textContent = `通信エラー: ${err.message}`;
-            uploadBtn.disabled = false;
         });
         
-        // 何もしない（ポーリングはすでに開始済み）
+        if (!startRes.ok) {
+            progressContainer.style.display = "none";
+            const errorText = await startRes.text();
+            status.textContent = `エラー: ${errorText}`;
+            uploadBtn.disabled = false;
+            return;
+        }
+        
+        const startData = await startRes.json();
+        const instanceId = startData.id;
+        currentJobId = instanceId;
+        console.log('ジョブ開始:', instanceId);
+        
+        // ポーリング開始
+        startPolling(instanceId);
         
     } catch (err) {
         stopPolling();
         progressContainer.style.display = "none";
-        status.textContent = `エラー: ${err.message}`;
+        status.textContent = `通信エラー: ${err.message}`;
         uploadBtn.disabled = false;
     }
 });
 
-function startPollingWithoutJobId() {
+function startPolling(instanceId) {
     stopPolling();
-    // 初回は即座に実行
-    if (currentJobId) pollProgress(currentJobId);
     
     pollingInterval = setInterval(async () => {
-        if (currentJobId) {
-            await pollProgress(currentJobId);
-        }
+        await pollStatus(instanceId);
     }, 10000); // 10秒間隔
+    
+    // 初回は即座に実行
+    pollStatus(instanceId);
 }
 
-async function pollProgress(jobId) {
+async function pollStatus(instanceId) {
     try {
-        const progressEndpoint = `${API_BASE_URL}/progress/${jobId}`;
-        const res = await fetch(progressEndpoint);
+        const statusEndpoint = `${API_BASE_URL}/status/${instanceId}`;
+        const res = await fetch(statusEndpoint);
         
-        if (res.ok) {
-            const data = await res.json();
-            updateProgress(data);
+        if (!res.ok) return;
+        
+        const data = await res.json();
+        
+        // 進捗更新
+        if (data.customStatus) {
+            updateProgress(data.customStatus);
         }
+        
+        // 完了時
+        if (data.runtimeStatus === "Completed") {
+            stopPolling();
+            await downloadResult(instanceId);
+            progressContainer.style.display = "none";
+            status.textContent = "✅ 完了しました";
+            uploadBtn.disabled = false;
+        }
+        
+        // 失敗時
+        if (data.runtimeStatus === "Failed") {
+            stopPolling();
+            progressContainer.style.display = "none";
+            status.textContent = "❌ 処理に失敗しました";
+            uploadBtn.disabled = false;
+        }
+        
     } catch (err) {
-        // エラーは無視（ポーリング継続）
+        console.error('ポーリングエラー:', err);
+    }
+}
+
+async function downloadResult(instanceId) {
+    try {
+        const downloadEndpoint = `${API_BASE_URL}/download/${instanceId}`;
+        const res = await fetch(downloadEndpoint);
+        
+        if (!res.ok) {
+            status.textContent = "ダウンロードに失敗しました";
+            return;
+        }
+        
+        const blob = await res.blob();
+        const contentDisposition = res.headers.get('content-disposition');
+        let filename = 'generated_files.zip';
+        
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename\*=UTF-8''(.+)/);
+            if (match) filename = decodeURIComponent(match[1]);
+        }
+        
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        
+    } catch (err) {
+        console.error('ダウンロードエラー:', err);
+        status.textContent = "ダウンロードに失敗しました";
     }
 }
 

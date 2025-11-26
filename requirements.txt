@@ -3,6 +3,7 @@
 # azure-monitor-opentelemetry
 
 azure-functions
+azure-functions-durable
 pandas
 openpyxl
 anthropic

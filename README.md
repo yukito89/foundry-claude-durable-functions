@@ -22,10 +22,10 @@
 - [前提条件](#前提条件)
 - [環境構築](#環境構築)
 - [設定](#設定)
-  - [.envファイル](#envファイル)
-  - [Azure AI Foundryの設定](#azure-ai-foundryの設定)
 - [ローカルでの実行](#ローカルでの実行)
 - [Azureへのデプロイ](#azureへのデプロイ)
+- [進捗表示機能](#進捗表示機能)
+- [トラブルシューティング](#トラブルシューティング)
 - [主要ファイル構成](#主要ファイル構成)
 - [使用技術一覧](#使用技術一覧)
 
@@ -36,13 +36,13 @@
 ### システム全体構成
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────────┐
-│   フロントエンド │    │   バックエンド   │    │   LLMサービス        │
-│                 │    │                 │    │                     │
-│ Azure Static    │───▶│ Azure Functions │───▶│ Azure AI Foundry    │
-│ Web Apps        │    │                 │    │ (Claude Sonnet 4.5) │
-│                 │    │                 │    │                     │
-└─────────────────┘    └─────────────────┘    └─────────────────────┘
+┌─────────────────┐    ┌──────────────────────────────────┐    ┌─────────────────────┐
+│   フロントエンド │    │   バックエンド (Durable Functions)│    │   LLMサービス        │
+│                 │    │                                  │    │                     │
+│ Azure Static    │───▶│ Starter → Orchestrator          │───▶│ Azure AI Foundry    │
+│ Web Apps        │    │              ↓                   │    │ (Claude Sonnet 4.5) │
+│                 │    │           Activity               │    │                     │
+└─────────────────┘    └──────────────────────────────────┘    └─────────────────────┘
         │                      │
         │ 10秒ポーリング        │
         └──────────────────────┘
@@ -51,15 +51,39 @@
           ┌─────────────┐
           │ Azure Blob  │
           │ Storage     │
-          │ (進捗管理)   │
+          │ (進捗管理・  │
+          │  結果保存)   │
           └─────────────┘
 ```
+
+### Durable Functions構成
+
+**HTTP応答230秒制限を回避するため、非同期アーキテクチャを採用:**
+
+1. **Starter関数（3~5秒で完了）**
+   - ファイルをBlobに保存
+   - Orchestratorを起動
+   - instanceIdを即座に返却 → HTTP応答完了
+
+2. **Orchestrator関数（バックグラウンド実行）**
+   - 処理全体を管理
+   - 進捗状態を保持
+   - Activity関数を呼び出し
+
+3. **Activity関数（無制限実行）**
+   - 実際のテスト生成処理を実行
+   - 既存のcore/モジュールを呼び出し
+   - 処理時間: 5分でも10分でも無制限
+
+4. **クライアント（10秒間隔ポーリング）**
+   - `/api/status/{instanceId}` で進捗確認
+   - 完了時に `/api/download/{instanceId}` でダウンロード
 
 ### モジュール構成
 
 ```
 testgen-unit-diff/
-├── function_app.py          # HTTPエンドポイント（通常版・差分版・進捗取得）
+├── function_app.py          # Durable Functions定義
 ├── core/                    # ビジネスロジック層
 │   ├── normal_mode.py       # 通常モード処理
 │   ├── diff_mode.py         # 差分モード処理
@@ -76,31 +100,20 @@ testgen-unit-diff/
 ### 処理フロー
 
 #### 通常モード
-1. **Excel解析**: アップロードされたExcelファイルをMarkdown形式に構造化
-2. **テスト観点抽出**: LLMが設計書からテスト観点を抽出
-3. **テスト仕様書生成**: LLMがテスト観点を基にテスト仕様書を生成
-4. **成果物変換**: MarkdownをExcel/CSV形式に変換
-5. **ZIP作成**: 全成果物をZIPファイルにまとめて返却
+1. **ファイルアップロード**: Starter関数がファイルをBlobに保存し、instanceIdを即座に返却
+2. **Excel解析**: Activity関数がExcelファイルをMarkdown形式に構造化
+3. **テスト観点抽出**: LLMが設計書からテスト観点を抽出
+4. **テスト仕様書生成**: LLMがテスト観点を基にテスト仕様書を生成
+5. **成果物変換**: MarkdownをExcel/CSV形式に変換
+6. **結果保存**: ZIPファイルをBlobに保存し、ダウンロードURLを提供
 
 #### 差分モード
-1. **新版Excel解析**: 新版設計書をMarkdown形式に構造化
-2. **差分検知**: 旧版と新版の設計書を比較して変更点を抽出
-3. **テスト観点抽出**: 差分を考慮したテスト観点を抽出
-4. **テスト仕様書生成**: 旧版テスト仕様書を参考に差分版を生成
-5. **成果物変換・ZIP作成**: 通常モードと同様
-
-### LLMサービス
-
-`core/llm_service.py`でAzure AI Foundry経由でClaude Sonnet 4.5を利用：
-
-```python
-from anthropic import AnthropicFoundry
-
-client = AnthropicFoundry(
-    api_key=foundry_api_key,
-    base_url=foundry_endpoint
-)
-```
+1. **ファイルアップロード**: Starter関数が新旧ファイルをBlobに保存し、instanceIdを即座に返却
+2. **新版Excel解析**: Activity関数が新版設計書をMarkdown形式に構造化
+3. **差分検知**: 旧版と新版の設計書を比較して変更点を抽出
+4. **テスト観点抽出**: 差分を考慮したテスト観点を抽出
+5. **テスト仕様書生成**: 旧版テスト仕様書を参考に差分版を生成
+6. **成果物変換・結果保存**: 通常モードと同様
 
 ---
 
@@ -109,7 +122,7 @@ client = AnthropicFoundry(
 - [Python 3.11](https://www.python.org/downloads/release/python-3110/)
 - [Visual Studio Code](https://code.visualstudio.com/)
 - [Node.js 18.x 以降](https://nodejs.org/) （Azure Functions Core Toolsのインストールに必要）
-- [Azure アカウント](https://azure.microsoft.com/ja-jp/) （Azure AI FoundryおよびAzureへのデプロイに必要）
+- [Azure アカウント](https://azure.microsoft.com/ja-jp/)
 
 ---
 
@@ -117,421 +130,334 @@ client = AnthropicFoundry(
 
 ### 1. Azure Functions Core Toolsのインストール
 
-Azure Functions Core Toolsは、ローカル環境でAzure Functionsを開発・実行・デバッグするために必要なコマンドラインツールです。
+**npm経由でインストール（推奨）:**
 
-**方法1: npm経由でインストール（推奨）**
-
-1. ターミナルでNode.jsがインストールされていることを確認します。
-   ```
-   node --version
-   ```
-   
-2. 管理者権限でターミナルを開き、以下を実行します。
-   ```
-   npm install -g azure-functions-core-tools@4 --unsafe-perm true
-   ```
-
-3. インストール完了後、バージョンを確認します。
-   ```
-   func --version
-   ```
-
-**方法2: MSIインストーラーを使用**
-
-1. [Azure Functions Core Tools リリースページ](https://github.com/Azure/azure-functions-core-tools/releases)にアクセスします。
-2. 最新バージョンの `Azure.Functions.Cli.win-x64.<version>.msi` をダウンロードします。
-3. ダウンロードしたMSIファイルを実行し、インストールウィザードに従います。
-4. インストール完了後、新しいターミナルを開いて確認します。
-   ```
-   func --version
-   ```
+```bash
+node --version  # Node.jsがインストールされていることを確認
+npm install -g azure-functions-core-tools@4 --unsafe-perm true
+func --version  # インストール確認
+```
 
 ### 2. Visual Studio Code 拡張機能のインストール
 
-開発を効率化するために、以下の拡張機能をインストールします。
-
-**1. Azure Tools（拡張機能パック）**
-
-1. VS Codeを開きます。
-2. 左側のアクティビティバーから「拡張機能」アイコン（四角が4つ並んだアイコン）をクリックするか、`Ctrl+Shift+X`を押します。
-3. 検索ボックスに「**Azure Tools**」と入力します。
-4. 「Azure Tools」（発行元: Microsoft）を見つけて「インストール」ボタンをクリックします。
-5. この拡張機能パックには以下が含まれます：
-   - Azure Account
-   - Azure Functions
-   - Azure Resources
-   - Azure Storage
-   - Azure App Service
-   - その他Azure関連ツール
-
-**2. Python**
-
-1. 拡張機能の検索ボックスに「**Python**」と入力します。
-2. 「Python」（発行元: Microsoft）を見つけて「インストール」ボタンをクリックします。
-3. この拡張機能により、以下の機能が有効になります：
-   - コード補完（IntelliSense）
-   - デバッグ機能
-   - リンティング
-   - コードフォーマット
-
-**3. Pylance（Pythonの言語サーバー）**
-
-1. 拡張機能の検索ボックスに「**Pylance**」と入力します。
-2. 「Pylance」（発行元: Microsoft）を見つけて「インストール」ボタンをクリックします。
-3. Python拡張機能と連携して、高速な型チェックとコード補完を提供します。
-
-**4. Live Server**
-
-1. 拡張機能の検索ボックスに「**Live Server**」と入力します。
-2. 「Live Server」（発行元: Ritwick Dey）を見つけて「インストール」ボタンをクリックします。
-3. HTMLファイルを右クリックして「Open with Live Server」を選択すると、ローカルWebサーバーが起動します。
+以下の拡張機能をインストール:
+- **Azure Tools** (Microsoft)
+- **Python** (Microsoft)
+- **Pylance** (Microsoft)
+- **Live Server** (Ritwick Dey)
 
 ### 3. プロジェクトのセットアップ
 
-1.  **リポジトリのクローン**
-    
-    VS Codeのターミナルで以下を実行します。
-    ```
-    git clone <リポジトリのURL>
-    cd <プロジェクトディレクトリ>
-    ```
+```bash
+git clone <リポジトリのURL>
+cd <プロジェクトディレクトリ>
+py -3.11 -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-2.  **VS Codeでプロジェクトを開く**
-    
-    ファイルメニューから「フォルダーを開く」でプロジェクトディレクトリを開きます。
+### 4. local.settings.jsonの作成
 
-3.  **仮想環境の作成と有効化**
-    
-    VS Codeのターミナル（`Ctrl+@`で開く）で以下を実行します。
-    ```
-    py -3.11 -m venv .venv
-    .venv\Scripts\activate
-    ```
-    
-    **注意:** Python 3.11がインストールされていない場合は、[Python公式サイト](https://www.python.org/downloads/release/python-3110/)からダウンロードしてインストールしてください。
+プロジェクトルートに`local.settings.json`を作成:
 
-4.  **必要なライブラリのインストール**
-    ```
-    pip install -r requirements.txt
-    ```
-
-5.  **CORS設定（ローカル開発用）**
-    
-    フロントエンドからAPIを呼び出すために、`local.settings.json`にCORS設定が必要です。
-    
-    プロジェクトルートに`local.settings.json`ファイルを作成し、以下の内容を記述します：
-    
-    ```json
-    {
-        "IsEncrypted": false,
-        "Values": {
-            "AzureWebJobsStorage": "",
-            "FUNCTIONS_WORKER_RUNTIME": "python",
-            "AzureWebJobsSecretStorageType": "files"
-        },
-        "Host": {
-            "CORS": "*",
-            "LocalHttpPort": 7071
-        }
+```json
+{
+    "IsEncrypted": false,
+    "Values": {
+        "AzureWebJobsStorage": "<Azure Storage接続文字列>",
+        "AZURE_STORAGE_CONNECTION_STRING": "<Azure Storage接続文字列>",
+        "FUNCTIONS_WORKER_RUNTIME": "python",
+        "AzureWebJobsSecretStorageType": "files"
+    },
+    "Host": {
+        "CORS": "*",
+        "LocalHttpPort": 7071
     }
-    ```
+}
+```
+
+**重要**: `AzureWebJobsStorage`と`AZURE_STORAGE_CONNECTION_STRING`には、[設定](#設定)セクションで取得したAzure Storageの接続文字列を設定してください。
 
 ---
 
 ## 設定
 
-### .envファイル
+### 1. Azure Storage Accountの作成
 
-プロジェクトのルートにある`.env.example`をコピーして`.env`ファイルを作成します。このファイルに各種サービスの接続情報を記述します。
+#### ストレージアカウントの作成
 
-VS Codeのターミナルで以下を実行します。
-```
+1. [Azureポータル](https://portal.azure.com)にアクセス
+2. 「リソースの作成」→「ストレージアカウント」を検索
+3. 基本設定:
+   - **ストレージアカウント名**: 一意の名前（例: `testgenprogress`）
+   - **地域**: Function Appと同じリージョン推奨
+   - **パフォーマンス**: Standard
+   - **冗長性**: ローカル冗長ストレージ (LRS)
+4. 「確認および作成」→「作成」
+
+#### 接続文字列の取得
+
+1. 作成したストレージアカウントを開く
+2. 「アクセスキー」→「キーの表示」
+3. **key1**の「接続文字列」をコピー
+
+### 2. .envファイルの設定
+
+`.env.example`をコピーして`.env`を作成:
+
+```bash
 copy .env.example .env
 ```
 
-**注意:** `.env`ファイルには認証情報などの機密情報が含まれるため、絶対にGitでコミットしないでください。`.gitignore`に`.env`が記載されていることを確認してください。
+`.env`ファイルに以下を設定:
 
-### Azure AI Foundryの設定
+```env
+# Azure AI Foundry (Claude) 接続情報
+AZURE_FOUNDRY_API_KEY=<APIキー>
+AZURE_FOUNDRY_ENDPOINT=<エンドポイントURL>
 
-2025年11月18日にMicrosoftとAnthropicが提携し、Azure AI FoundryでClaude Sonnet 4.5が利用可能になりました。以下の手順で設定を行います。
-
-#### 1. Azure AI Foundryプロジェクトの作成
-
-1. [Azure AI Foundry](https://ai.azure.com/)にアクセスし、Azureアカウントでサインインします。
-2. 新しいプロジェクトを作成します。
-3. プロジェクト設定から「Models + endpoints」を選択します。
-
-#### 2. Claude Sonnet 4.5のデプロイ
-
-1. 「+ Deploy model」をクリックします。
-2. モデルカタログから「Claude Sonnet 4.5」を検索して選択します。
-3. デプロイ名を設定します（例: `claude-sonnet-4-5`）。
-4. デプロイを完了します。
-
-#### 3. 接続情報の取得
-
-1. デプロイしたモデルの詳細ページを開きます。
-2. 以下の情報をコピーします：
-   - **エンドポイントURL**: `https://your-foundry.services.ai.azure.com/anthropic/`
-   - **APIキー**: 「Keys and Endpoint」セクションから取得
-   - **デプロイ名**: 設定したデプロイ名
-
-#### 4. .envファイルの設定
-
-```.env
-# -------------------- Azure AI Foundry (Claude) 接続情報 --------------------
-# APIキー (必須)
-AZURE_FOUNDRY_API_KEY=<ここにAPIキーを記述>
-
-# エンドポイント (必須)
-# 例: https://your-foundry.services.ai.azure.com/anthropic/
-AZURE_FOUNDRY_ENDPOINT=<ここにエンドポイントを記述>
-
-
-# -------------------- モデル選択 --------------------
-# 構造化処理用モデル (例: claude-sonnet-4-5)
+# モデル選択
 MODEL_STRUCTURING=claude-sonnet-4-5
-
-# テスト観点抽出用モデル
 MODEL_TEST_PERSPECTIVES=claude-sonnet-4-5
-
-# テスト仕様書生成用モデル
 MODEL_TEST_SPEC=claude-sonnet-4-5
-
-# 差分検知用モデル
 MODEL_DIFF_DETECTION=claude-sonnet-4-5
 
-# -------------------- Azure Storage 接続情報 --------------------
-# 進捗管理用のBlob Storage接続文字列 (必須)
-AZURE_STORAGE_CONNECTION_STRING=<ここに接続文字列を記述>
+# Azure Storage 接続情報
+AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
 ```
 
-**モデル選択について:**
-- 各処理ごとに異なるモデルを指定できます
-- Azure AI Foundryでデプロイしたモデルのデプロイ名を指定します
-- 使い分けの例:
-  - コスト重視: 軽い処理に`gpt-4o-mini`、重い処理に`claude-sonnet-4-5`
-  - 品質重視: 全ての処理に`claude-sonnet-4-5`
-  - バランス型: 構造化・差分検知に`gpt-4o-mini`、テスト生成に`claude-sonnet-4-5`
-- 同じモデルを全てに使用する場合は、全てに同じデプロイ名を設定してください
+### 3. Azure AI Foundryの設定
+
+1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
+2. 新しいプロジェクトを作成
+3. 「Models + endpoints」→「+ Deploy model」
+4. 「Claude Sonnet 4.5」を検索して選択
+5. デプロイ名を設定（例: `claude-sonnet-4-5`）
+6. エンドポイントURLとAPIキーを`.env`に設定
 
 ---
 
 ## ローカルでの実行
 
-1.  **Azure Functionsホストの起動**
-    
-    VS Codeのターミナルで以下を実行します。
-    ```
-    func start
-    ```
+```bash
+func start
+```
 
-2.  起動後、`http://localhost:7071/api/upload` というエンドポイントが利用可能になります。
+起動後、`http://localhost:7071/api/upload` が利用可能になります。
 
-3.  **関数キーの確認（ローカル開発時）**
-    
-    ローカル環境では、起動時にターミナルに表示されるマスターキーまたは関数キーを使用します。
-    本番環境では、Azureポータルから関数キーを取得します（次セクション参照）。
-
-4.  フロントエンドからの動作確認
-    - VS Codeで「Live Server」拡張機能をインストール
-    - `frontend/index.html`を右クリック→「Open with Live Server」で起動
-    - ブラウザでアクセスキーを入力し、Excelファイルをアップロードして動作確認
+フロントエンドの起動:
+1. `frontend/index.html`を右クリック
+2. 「Open with Live Server」を選択
+3. ブラウザでExcelファイルをアップロード
 
 ---
 
 ## Azureへのデプロイ
 
+### Durable Functionsの前提条件
+
+**重要**: 以下のプランが必要です（Consumptionプランでは動作しません）:
+
+- **Premium プラン（EP1）**: 約 ¥20,000/月
+- **Flex Consumption**: 使用量に応じた従量課金
+- **Dedicated (App Service)**: 既存のApp Serviceプランを流用可能
+
 ### バックエンド（Azure Functions）のデプロイ
 
-1.  **Azure Tools拡張機能のインストール**
-    VS Codeの拡張機能から「Azure Tools」をインストールします。
+1. **Function Appの作成**
+   - VS Codeの「Azure」→「Functions」を右クリック
+   - 「Create Function App in Azure...」を選択
+   - アプリ名、Pythonバージョン（**3.11**）、リージョンを指定
 
-2.  **Azureにサインイン**
-    VS Codeのサイドバーから「Azure」アイコンをクリックし、「Sign in to Azure」でサインインします。
+2. **デプロイ**
+   - 作成したFunction Appを右クリック
+   - 「Deploy to Function App...」を選択
 
-3.  **Function Appの作成とデプロイ**
-    - サイドバーの「Azure」→「Functions」を右クリック
-    - 「Create Function App in Azure...」を選択
-    - アプリ名、Pythonバージョン（**3.11を推奨**）、リージョンを指定
-    - 作成完了後、作成したFunction Appを右クリック→「Deploy to Function App...」を選択
-    - **注意:** `単体テスト仕様書.xlsx`がプロジェクトルートに配置されていることを確認してください。デプロイ時に自動的に含まれます。`.funcignore`に`*.xlsx`が記載されている場合は削除してください。
-
-4.  **環境変数の設定**
-    - Azureポータルで作成したFunction Appを開く
-    - 「設定」→「環境変数」→「+追加」→「アプリケーション設定の追加/編集」
-    - `.env`ファイルの内容を1つずつ追加（`AZURE_FOUNDRY_API_KEY`, `AZURE_FOUNDRY_ENDPOINT`, `MODEL_STRUCTURING`, `MODEL_TEST_PERSPECTIVES`, `MODEL_TEST_SPEC`, `MODEL_DIFF_DETECTION`, `AZURE_STORAGE_CONNECTION_STRING`）
-
-5.  **関数キーの取得（セキュリティ設定）**
-    - AzureポータルでFunction Appを開く
-    - 「関数」→対象の関数（upload）を選択
-    - 「関数キー」タブをクリック
-    - 「+新しいキーを追加」でキーを作成（例: 名前「client-key」）
-    - 作成されたキーの値をコピーし、フロントエンドで使用します
-    - **注意:** 関数キーは外部に漏らさないように管理してください
-
-6.  **AIアクセス制限の設定（推奨）**
-    
-    Azure AI Foundryへのアクセスを特定のFunction Appからのみに制限することで、セキュリティを強化できます。
-    
-    **手順1: Function AppのアウトバウンドIP確認**
-    
-    1. AzureポータルでFunction Appを開く
-    2. 「設定」→「プロパティ」を選択
-    3. 「アウトバウンドIPアドレス」をコピー（カンマ区切りで複数表示）
-       - 例: `20.43.123.45,20.43.123.46,20.43.123.47,20.43.123.48`
-    
-    **手順2: Azure AI Foundryでネットワーク制限を設定**
-    
-    1. [Azure AI Foundry](https://ai.azure.com/)にアクセスし、プロジェクトを開く
-    2. 「設定」→「ネットワーク」を選択
-    3. 「パブリックネットワークアクセス」で「選択したネットワークとIPアドレス」を選択
-    4. 「ファイアウォール」セクションで以下を追加:
-       
-       **開発用PCのIP（ローカル開発用）:**
-       - 「+クライアントIPアドレスの追加」をクリック
-       - 名前: `開発PC`
-       - IPアドレス範囲: `159.28.124.242/32`（単一IPの場合は `/32` を付ける）
-       - 優先度: `100`
-       - アクション: `許可`
-       
-       **Function AppのアウトバウンドIP（本番用）:**
-       - 「+IPアドレス範囲の追加」をクリック
-       - 各IPアドレスに対して個別に設定:
-         - 名前: `FunctionApp-IP1`, `FunctionApp-IP2` など
-         - IPアドレス範囲: `20.43.123.45/32`, `20.43.123.46/32` など
-         - 優先度: `200`, `201`, `202` など（連番で設定）
-         - アクション: `許可`
-    
-    5. 「保存」をクリック
-    
-    **CIDR表記について:**
-    - 単一IPアドレス: `159.28.124.242/32`
-    - IP範囲（例: 159.28.124.0～159.28.124.255）: `159.28.124.0/24`
-    - `/32` = 1つのIPアドレスのみ
-    - `/24` = 256個のIPアドレス範囲
-    
-    **優先度について:**
-    - 数値が小さいほど優先度が高い（100が最優先）
-    - 複数のルールがある場合、優先度順に評価される
-    - 推奨: 開発用100番台、本番用200番台で管理
+3. **環境変数の設定**
+   - Azureポータルで作成したFunction Appを開く
+   - 「設定」→「環境変数」→「+追加」
+   - 以下の環境変数を追加:
+     - `AZURE_FOUNDRY_API_KEY`
+     - `AZURE_FOUNDRY_ENDPOINT`
+     - `MODEL_STRUCTURING`
+     - `MODEL_TEST_PERSPECTIVES`
+     - `MODEL_TEST_SPEC`
+     - `MODEL_DIFF_DETECTION`
+     - `AZURE_STORAGE_CONNECTION_STRING`
+     - **`AzureWebJobsStorage`** ← Durable Functions用（`AZURE_STORAGE_CONNECTION_STRING`と同じ値）
 
 ### フロントエンド（Azure Static Web Apps）のデプロイ
 
-1.  **script.jsのAPIエンドポイント変更**
-    
-    `frontend/script.js`を編集し、Function AppのURLを設定します。
-    ```javascript
-    const endpoint = 'https://<your-function-app>.azurewebsites.net/api/upload';
-    ```
-
-2.  **GitHubリポジトリにプッシュ**
-    
-    VS Codeのターミナルで以下を実行し、変更をGitHubにプッシュします。
-    ```bash
-    git add .
-    git commit -m "Update endpoint for deployment"
-    git push origin main
-    ```
-    
-    **注意:** GitHubリポジトリがまだない場合は、事前にGitHub上でリポジトリを作成し、ローカルリポジトリと連携してください。
-
-3.  **Azure Static Web Appsの作成とデプロイ**
-    - Azureポータル (https://portal.azure.com) にアクセス
-    - 「リソースの作成」→「Static Web App」を検索して選択
-    - 「作成」をクリック
-    - 基本設定:
-      - サブスクリプション、リソースグループを選択
-      - 名前を入力
-      - リージョンを選択（例: East Asia）
-    - デプロイの詳細:
-      - ソース: 「GitHub」を選択
-      - GitHubアカウントでサインイン
-      - 組織、リポジトリ、ブランチを選択
-    - ビルドの詳細:
-      - ビルドプリセット: 「Custom」を選択
-      - アプリの場所: `/frontend`
-      - APIの場所: 空欄（APIはFunction Appで別途デプロイ済み）
-      - 出力場所: 空欄
-    - 「確認および作成」→「作成」をクリック
-    - 作成完了後、GitHub Actionsが自動でデプロイを実行します
-
-4.  **動作確認**
-    - Static Web AppsのURLにアクセス
-    - アクセスキー欄に関数キーを入力
-    - Excelファイルをアップロードして動作確認
-
----
-
-## 主要ファイル構成
-
-- **`function_app.py`**: メインの処理が記述されたAzure FunctionsのHTTPトリガー関数。
-- **`requirements.txt`**: Pythonの依存パッケージリスト。
-- **`.env.example`**: 環境変数のテンプレートファイル。
-- **`host.json`**: Azure Functionsホストのグローバル設定ファイル。ログ設定、拡張機能バンドルのバージョンなど、アプリケーション全体の動作を制御します。
-- **`local.settings.json`**: ローカル開発環境専用の設定ファイル。ランタイム設定、CORS設定、ローカル環境変数などを管理します（`.gitignore`で除外済み）。
-- **`単体テスト仕様書.xlsx`**: テスト仕様書を生成する際の書き込み先テンプレートExcelファイル。プロジェクトルートに配置し、Azure Functionsと一緒にデプロイされます。
-- **`frontend/index.html`, `frontend/script.js`, `frontend/style.css`**: 簡単な動作確認用のフロントエンドファイル。
-
----
-
-## 使用技術一覧
-
-本プロジェクトで利用している主要なライブラリ、開発ツール、およびクラウドサービスは以下の通りです。
-
-### 1. Pythonライブラリ (`requirements.txt`)
-
--   `azure-functions`: Azure Functionsのトリガーやバインディングなど、Pythonでの関数開発を可能にするためのコアライブラリ。
--   `anthropic`: Anthropic Claude APIクライアントライブラリ。Azure AI Foundry経由でClaude Sonnet 4.5を呼び出すために使用。
--   `python-dotenv`: `.env`ファイルから環境変数を読み込むために使用。ローカル開発で接続情報を管理します。
--   `pandas`: データ操作とExcelファイルの読み込みに使用。
--   `openpyxl`: Excelファイルの書き込みと操作に使用。
--   `azure-storage-blob`: Azure Blob Storageを使用した進捗管理に使用。
-
-### 2. 開発・デプロイツール
-
--   **Azure Functions Core Tools**:
-    ローカル環境でAzure Functionsを開発、実行、デバッグするためのコマンドラインツール (`func`コマンド)。`func start`でのローカルテストに必須です。
-
--   **Visual Studio Code 拡張機能**:
-    -   **Azure Tools**: Azure Functions, App Service, Storageなど、AzureリソースをVS CodeのGUI上から直接操作・管理・デプロイできる統合拡張機能パック。
-    -   **Python**: VS CodeでPythonのコード補完、デバッグ、IntelliSenseなどを有効にするための必須拡張機能。
-    -   **Pylance**: Python拡張機能と連携し、高速な型チェックとコード補完を提供するPython言語サーバー。
-    -   **Live Server**: ローカル開発時にHTMLファイルを簡易Webサーバーで起動するための拡張機能。
-
-### 3. 利用しているクラウドサービス
-
--   **Azure Functions**:
-    サーバーレスでコードを実行するためのコンピューティングサービス。本プロジェクトのバックエンド処理はこの上で動作します。
-
--   **Azure Static Web Apps**:
-    静的コンテンツ（HTML、CSS、JavaScript）をホスティングするためのサービス。本プロジェクトのフロントエンドをデプロイします。
-
--   **Azure AI Foundry**:
-    Microsoft Azure上で提供される、Claude Sonnet 4.5などの大規模言語モデルを利用するためのサービス。2024年11月18日のMicrosoftとAnthropicの提携により利用可能になりました。
-
--   **Azure Blob Storage**:
-    処理の進捗状況を保存・管理するためのストレージサービス。フロントエンドが10秒間隔でポーリングし、リアルタイムに進捗を表示します。
+1. `frontend/script.js`のエンドポイントURLを本番環境に変更
+2. GitHubにプッシュ
+3. Azureポータルで「Static Web App」を作成
+4. GitHubリポジトリと連携してデプロイ
 
 ---
 
 ## 進捗表示機能
 
-処理の進行状況をリアルタイムでUIに表示する機能を実装しています。
+### 概要
+Azure Blob Storageを利用して、バックエンドの処理進捗をリアルタイムでUIに反映します。フロントエンドは10秒間隔でポーリングを行い、進捗状況を取得します。
 
-### セットアップ
+### 進捗ステージ
 
-1. **Azure Storage Accountの作成**
-   - Azureポータルで「ストレージアカウント」を作成
-   - 「アクセスキー」から接続文字列をコピー
-   - `.env`ファイルに`AZURE_STORAGE_CONNECTION_STRING`を追加
+| ステージ | 進捗率 | 表示メッセージ |
+|---------|--------|---------------|
+| structuring | 10% | 📄 設計書を構造化中... |
+| diff | 30% | 🔍 差分を検知中... (差分モードのみ) |
+| perspectives | 40-50% | 💡 テスト観点を抽出中... |
+| testspec | 70% | 📝 テスト仕様書を生成中... |
+| converting | 90% | 🔄 成果物を変換中... |
+| completed | 100% | ✅ 完了しました |
 
-2. **進捗ステージ**
-   - 📄 設計書を構造化中... (10%)
-   - 🔍 差分を検知中... (30% - 差分モードのみ)
-   - 💡 テスト観点を抽出中... (40-50%)
-   - 📝 テスト仕様書を生成中... (70%)
-   - 🔄 成果物を変換中... (90%)
-   - ✅ 完了しました (100%)
+### Blob Storage コンテナ構成
 
-詳細は`PROGRESS_FEATURE.md`を参照してください。
+以下のコンテナが自動作成されます:
+
+| コンテナ名 | 用途 | ライフサイクル |
+|-----------|------|---------------|
+| `temp-uploads` | 入力ファイル一時保存 | 手動削除推奨 |
+| `results` | 生成結果のZIPファイル | 手動削除推奨 |
+| `progress` | 進捗情報 | 自動上書き |
+| `azure-webjobs-hosts` | Durable Functions制御情報 | 自動管理 |
+
+### ライフサイクル管理（推奨）
+
+古いファイルを自動削除してストレージコストを削減:
+
+**Azure Portal → Storage Account → データ管理 → ライフサイクル管理**
+
+```json
+{
+  "rules": [{
+    "name": "cleanup-temp-files",
+    "enabled": true,
+    "definition": {
+      "filters": {
+        "prefixMatch": ["temp-uploads/", "results/"]
+      },
+      "actions": {
+        "baseBlob": {
+          "delete": {"daysAfterModificationGreaterThan": 1}
+        }
+      }
+    }
+  }]
+}
+```
+
+---
+
+## トラブルシューティング
+
+### Durable Functions関連
+
+#### エラー: "AzureWebJobsStorage が設定されていません"
+**原因**: Durable Functionsに必要なストレージ接続文字列が未設定
+
+**解決策**:
+- ローカル: `local.settings.json` に `AzureWebJobsStorage` を追加
+- 本番: Azure Portal で環境変数 `AzureWebJobsStorage` を追加
+
+#### エラー: "results コンテナが見つかりません"
+**原因**: 結果保存用のBlobコンテナが未作成
+
+**解決策**:
+- 自動作成されるため、初回実行後に再試行
+- または手動でコンテナ `results` を作成
+
+#### 進捗が更新されない
+**原因**: ポーリング間隔が長すぎる、またはCORS設定の問題
+
+**解決策**:
+- `script.js` のポーリング間隔を確認（現在10秒）
+- Azure Portal → Function App → CORS設定を確認
+
+#### ダウンロードが開始されない
+**原因**: Blob URLの有効期限切れ、またはアクセス権限の問題
+
+**解決策**:
+- `/download/{instanceId}` エンドポイントを使用（Blob URLを直接使用しない）
+- Storage Accountのファイアウォール設定を確認
+
+### 進捗表示関連
+
+#### 進捗が10%で止まる
+**原因**: `progress`コンテナへの書き込み失敗
+
+**解決策**: `AZURE_STORAGE_CONNECTION_STRING`を確認
+
+#### ダウンロードが404エラー
+**原因**: `results`コンテナにファイルが存在しない
+
+**解決策**: Activity関数のログを確認
+
+---
+
+## パフォーマンス特性
+
+### 処理時間の内訳（例）
+
+| 処理 | 時間 | 備考 |
+|------|------|------|
+| HTTP応答 | 3~5秒 | ✅ 230秒制限を完全回避 |
+| Excel解析 | 10秒 | シート数に依存 |
+| LLM呼び出し（構造化） | 30秒 | トークン数に依存 |
+| LLM呼び出し（テスト観点） | 30秒 | トークン数に依存 |
+| LLM呼び出し（テスト仕様書） | 60秒 | トークン数に依存 |
+| Excel/CSV変換 | 5秒 | テストケース数に依存 |
+| **合計** | **約135秒** | **HTTP応答とは無関係** |
+
+### スケーラビリティ
+
+- **同時実行数**: Premium/Flexプランで自動スケール
+- **最大実行時間**: 無制限（Premium/Flex/Dedicated）
+- **ファイルサイズ制限**: Blob Storage経由のため実質無制限
+
+---
+
+## 主要ファイル構成
+
+- **`function_app.py`**: Durable Functions定義（Starter, Orchestrator, Activity）
+- **`requirements.txt`**: Pythonの依存パッケージリスト
+- **`.env.example`**: 環境変数のテンプレートファイル
+- **`host.json`**: Azure Functionsホストのグローバル設定ファイル
+- **`local.settings.json`**: ローカル開発環境専用の設定ファイル（`.gitignore`で除外済み）
+- **`単体テスト仕様書.xlsx`**: テスト仕様書を生成する際の書き込み先テンプレートExcelファイル
+- **`frontend/`**: フロントエンドファイル（index.html, script.js, style.css）
+
+---
+
+## 使用技術一覧
+
+### Pythonライブラリ
+
+- `azure-functions`: Azure Functionsのコアライブラリ
+- `azure-durable-functions`: Durable Functions用ライブラリ
+- `anthropic`: Anthropic Claude APIクライアント
+- `python-dotenv`: 環境変数管理
+- `pandas`: データ操作とExcelファイル読み込み
+- `openpyxl`: Excelファイル書き込み
+- `azure-storage-blob`: Azure Blob Storage操作
+
+### 開発・デプロイツール
+
+- **Azure Functions Core Tools**: ローカル開発・デバッグツール
+- **Visual Studio Code 拡張機能**: Azure Tools, Python, Pylance, Live Server
+
+### クラウドサービス
+
+- **Azure Functions**: サーバーレスコンピューティング
+- **Azure Static Web Apps**: 静的コンテンツホスティング
+- **Azure AI Foundry**: Claude Sonnet 4.5などのLLMサービス
+- **Azure Blob Storage**: 進捗管理・結果保存・Durable Functions状態管理
+
+---
+
+## 参考資料
+
+- [Azure Durable Functions 公式ドキュメント](https://learn.microsoft.com/ja-jp/azure/azure-functions/durable/)
+- [Python Durable Functions](https://learn.microsoft.com/ja-jp/azure/azure-functions/durable/quickstart-python-vscode)
+- [Blob Storage ライフサイクル管理](https://learn.microsoft.com/ja-jp/azure/storage/blobs/lifecycle-management-overview)
+- [Function App プラン比較](https://learn.microsoft.com/ja-jp/azure/azure-functions/functions-scale)
