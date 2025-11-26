@@ -22,11 +22,15 @@
     "extensions": {
         "http": {
             "routePrefix": "api",
+            "maxOutstandingRequests": 200,
+            "maxConcurrentRequests": 100,
+            "dynamicThrottlesEnabled": true,
             "customHeaders": {
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization"
             }
         }
-    }
+    },
+    "functionTimeout": "00:30:00"
 }
