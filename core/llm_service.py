@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from anthropic import AnthropicFoundry
+from anthropic import AnthropicFoundry, RateLimitError, APIError
 from dotenv import load_dotenv
 
 from prompts import (
@@ -90,23 +90,26 @@ def call_llm(system_prompt: str, user_prompt: str, model: str, max_retries: int 
                     result += text
             return result
 
-        except Exception as e:
-            error_message = str(e)
-            # レート制限エラーの場合はリトライ
-            if "rate_limit" in error_message.lower() or "too many requests" in error_message.lower():
-                if attempt < max_retries - 1:
-                    # 指数バックオフでリトライ間隔を計算（最大120秒）
-                    wait_time = min((2 ** attempt) * 3 + (attempt * 5), 120)
-                    logging.warning(f"Azure AI Foundry API レート制限エラー。{wait_time}秒後にリトライします（{attempt + 1}/{max_retries}）")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    logging.error("Azure AI Foundry API呼び出しが最大リトライ回数に達しました")
-                    raise RuntimeError("Azure AI Foundry APIのレート制限エラー。")
+        except RateLimitError as e:
+            # Anthropic SDKのレート制限エラー
+            if attempt < max_retries - 1:
+                wait_time = min((2 ** attempt) * 3 + (attempt * 5), 120)
+                logging.warning(f"Anthropic API レート制限エラー。{wait_time}秒後にリトライします（{attempt + 1}/{max_retries}）")
+                time.sleep(wait_time)
+                continue
             else:
-                # その他のエラーは即座に例外を発生
-                logging.error(f"Azure AI Foundry API呼び出し中にエラーが発生しました: {error_message}")
-                raise RuntimeError(f"Azure AI Foundry API呼び出しに失敗しました: {error_message}")
+                logging.error("Anthropic API呼び出しが最大リトライ回数に達しました")
+                raise RuntimeError("Anthropic APIのレート制限エラー。時間をおいて再試行してください。")
+        
+        except APIError as e:
+            # Anthropic SDKのAPIエラー（レート制限以外）
+            logging.error(f"Anthropic API呼び出し中にエラーが発生しました: {str(e)}")
+            raise RuntimeError(f"Anthropic API呼び出しに失敗しました: {str(e)}")
+        
+        except Exception as e:
+            # その他の予期しないエラー
+            logging.error(f"予期しないエラーが発生しました: {str(e)}")
+            raise RuntimeError(f"LLM呼び出し中に予期しないエラーが発生しました: {str(e)}")
     
     raise RuntimeError("Azure AI Foundry API呼び出しに失敗しました")
 

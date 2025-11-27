@@ -142,52 +142,28 @@ async def upload_starter(req: func.HttpRequest, client) -> func.HttpResponse:
         
         granularity = req.form.get("granularity", "simple")  # テスト粒度（デフォルト: simple）
         
-        # ========== 2. Blob Storageの準備 ==========
-        ensure_container_exists("temp-uploads")  # アップロードファイル保存用コンテナ
+        # ========== 2. Orchestratorを起動してinstance_idを取得 ==========
+        # instance_idはDurable Functionsが自動生成する一意のID
+        instance_id = await client.start_new("orchestrator")
         
-        # 一時的なUUIDを生成（Orchestrator起動前のBlobパス用）
-        # 理由: Orchestrator起動前にinstance_idが不明なため、一時IDで保存後にリネーム
-        import uuid
-        temp_id = str(uuid.uuid4())
-        
-        # ========== 3. ファイルをBlobに保存 ==========
+        # ========== 3. Blob Storageの準備 ==========
+        ensure_container_exists("temp-uploads")
         blob_service_client = get_blob_service_client()
-        file_refs = []  # Activity関数に渡すファイル参照情報
+        file_refs = []
         
+        # ========== 4. ファイルをBlobに保存（instance_idを使用） ==========
         for idx, file in enumerate(files):
-            # Blobパス: {temp_id}/input/file_{連番}_{元ファイル名}
-            blob_name = f"{temp_id}/input/file_{idx}_{file.filename}"
+            blob_name = f"{instance_id}/input/file_{idx}_{file.filename}"
             blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=blob_name)
             blob_client.upload_blob(file.stream.read(), overwrite=True)
             
-            # ファイル参照情報を記録
             file_refs.append({
-                "filename": file.filename,  # 元のファイル名
-                "blob_name": blob_name,  # Blobストレージ上のパス
-                "container": "temp-uploads"  # コンテナ名
+                "filename": file.filename,
+                "blob_name": blob_name,
+                "container": "temp-uploads"
             })
         
-        # ========== 4. Orchestratorを起動してinstance_idを取得 ==========
-        # instance_idはDurable Functionsが自動生成する一意のID
-        # このIDで進捗管理・結果取得を行う
-        instance_id = await client.start_new("orchestrator")
-        
-        # ========== 5. Blobパスをinstance_idに変更 ==========
-        # 理由: instance_idをファイルパスに含めることで、ジョブごとにファイルを管理
-        # 例: {temp_id}/input/file_0_xxx.xlsx → {instance_id}/input/file_0_xxx.xlsx
-        for file_ref in file_refs:
-            old_blob_name = file_ref["blob_name"]
-            new_blob_name = old_blob_name.replace(temp_id, instance_id)
-            
-            # Blobをコピー（start_copy_from_urlは非同期コピー）
-            old_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=old_blob_name)
-            new_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=new_blob_name)
-            new_blob_client.start_copy_from_url(old_blob_client.url)
-            
-            # 参照を更新（Activity関数で新しいパスを使用）
-            file_ref["blob_name"] = new_blob_name
-        
-        # ========== 6. Orchestratorにデータを送信 ==========
+        # ========== 5. Orchestratorにデータを送信 ==========
         input_data = {
             "mode": "normal",  # 処理モード（通常モード）
             "files": file_refs,  # ファイル参照情報
@@ -198,7 +174,7 @@ async def upload_starter(req: func.HttpRequest, client) -> func.HttpResponse:
         # raise_eventでOrchestratorにデータを送信（イベント名: start_processing）
         await client.raise_event(instance_id, "start_processing", input_data)
         
-        # ========== 7. レスポンスを即座に返却（3~5秒） ==========
+        # ========== 6. レスポンスを即座に返却（3~5秒） ==========
         # create_check_status_responseは以下のURLを含むレスポンスを生成:
         # - statusQueryGetUri: 進捗確認用URL
         # - sendEventPostUri: イベント送信用URL
@@ -251,19 +227,17 @@ async def upload_diff_starter(req: func.HttpRequest, client) -> func.HttpRespons
         
         granularity = req.form.get("granularity", "simple")
         
+        # Orchestratorを起動してinstance_idを取得
+        instance_id = await client.start_new("orchestrator")
+        
         # コンテナ作成
         ensure_container_exists("temp-uploads")
-        
-        # 一時的なinstance_idを生成（Blobパス用）
-        import uuid
-        temp_id = str(uuid.uuid4())
-        
-        # ファイルをBlobに保存
         blob_service_client = get_blob_service_client()
         file_refs = []
         
+        # ファイルをBlobに保存（instance_idを使用）
         for idx, file in enumerate(new_excel_files):
-            blob_name = f"{temp_id}/input/new_excel_{idx}_{file.filename}"
+            blob_name = f"{instance_id}/input/new_excel_{idx}_{file.filename}"
             blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=blob_name)
             blob_client.upload_blob(file.stream.read(), overwrite=True)
             file_refs.append({
@@ -273,44 +247,19 @@ async def upload_diff_starter(req: func.HttpRequest, client) -> func.HttpRespons
             })
         
         # 旧版ファイルも保存
-        old_md_blob = f"{temp_id}/input/old_structured.md"
+        old_md_blob = f"{instance_id}/input/old_structured.md"
         blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=old_md_blob)
         blob_client.upload_blob(old_structured_md.stream.read(), overwrite=True)
         
-        old_spec_blob = f"{temp_id}/input/old_test_spec.md"
+        old_spec_blob = f"{instance_id}/input/old_test_spec.md"
         blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=old_spec_blob)
         blob_client.upload_blob(old_test_spec_md.stream.read(), overwrite=True)
-        
-        # Orchestratorを起動（instance_idを先に取得）
-        instance_id = await client.start_new("orchestrator")
-        
-        # instance_idを使ってBlobパスを更新
-        for file_ref in file_refs:
-            old_blob_name = file_ref["blob_name"]
-            new_blob_name = old_blob_name.replace(temp_id, instance_id)
-            
-            old_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=old_blob_name)
-            new_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=new_blob_name)
-            new_blob_client.start_copy_from_url(old_blob_client.url)
-            
-            file_ref["blob_name"] = new_blob_name
-        
-        # 旧版ファイルも更新
-        new_old_md_blob = old_md_blob.replace(temp_id, instance_id)
-        old_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=old_md_blob)
-        new_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=new_old_md_blob)
-        new_blob_client.start_copy_from_url(old_blob_client.url)
-        
-        new_old_spec_blob = old_spec_blob.replace(temp_id, instance_id)
-        old_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=old_spec_blob)
-        new_blob_client = blob_service_client.get_blob_client(container="temp-uploads", blob=new_old_spec_blob)
-        new_blob_client.start_copy_from_url(old_blob_client.url)
         
         input_data = {
             "mode": "diff",
             "files": file_refs,
-            "old_structured_md_blob": new_old_md_blob,
-            "old_test_spec_md_blob": new_old_spec_blob,
+            "old_structured_md_blob": old_md_blob,
+            "old_test_spec_md_blob": old_spec_blob,
             "granularity": granularity,
             "instance_id": instance_id
         }
