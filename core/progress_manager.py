@@ -49,6 +49,28 @@ class ProgressManager:
         except:
             return None
     
+    def get_result_url(self, job_id: str, expiry_days: int = 1):
+        """結果ファイルのダウンロードURLを生成（1日間有効）"""
+        from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+        try:
+            container_client = self.blob_service_client.get_container_client("results")
+            blobs = list(container_client.list_blobs(name_starts_with=f"{job_id}/"))
+            if not blobs:
+                return None
+            
+            blob_name = blobs[0].name
+            sas_token = generate_blob_sas(
+                account_name=self.blob_service_client.account_name,
+                container_name="results",
+                blob_name=blob_name,
+                account_key=self.blob_service_client.credential.account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.utcnow() + timedelta(days=expiry_days)
+            )
+            return f"{self.blob_service_client.url}/results/{blob_name}?{sas_token}"
+        except:
+            return None
+    
     def delete_progress(self, job_id: str):
         blob_client = self.blob_service_client.get_blob_client(self.container_name, f"{job_id}.json")
         try:

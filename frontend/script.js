@@ -156,9 +156,8 @@ async function pollStatus(instanceId) {
         // 完了時
         if (data.runtimeStatus === "Completed") {
             stopPolling();
-            await downloadResult(instanceId);
             progressContainer.style.display = "none";
-            status.textContent = "✅ 完了しました";
+            status.innerHTML = '✅ 完了しました　<a href="history.html" style="color: #4CAF50;">📋 履歴ページでダウンロード</a>';
             uploadBtn.disabled = false;
         }
         
@@ -176,40 +175,6 @@ async function pollStatus(instanceId) {
         progressContainer.style.display = "none";
         status.textContent = `❌ サーバーエラー: ${err.message}`;
         uploadBtn.disabled = false;
-    }
-}
-
-async function downloadResult(instanceId) {
-    try {
-        const downloadEndpoint = `${API_BASE_URL}/download/${instanceId}`;
-        const res = await fetch(downloadEndpoint);
-        
-        if (!res.ok) {
-            status.textContent = "ダウンロードに失敗しました";
-            return;
-        }
-        
-        const blob = await res.blob();
-        const contentDisposition = res.headers.get('content-disposition');
-        let filename = 'generated_files.zip';
-        
-        if (contentDisposition) {
-            const match = contentDisposition.match(/filename\*=UTF-8''(.+)/);
-            if (match) filename = decodeURIComponent(match[1]);
-        }
-        
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        
-    } catch (err) {
-        console.error('ダウンロードエラー:', err);
-        status.textContent = "ダウンロードに失敗しました";
     }
 }
 

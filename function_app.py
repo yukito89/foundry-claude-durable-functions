@@ -646,6 +646,61 @@ async def get_status(req: func.HttpRequest, client) -> func.HttpResponse:
             headers=CORS_HEADERS
         )
 
+# ==================== List Results ====================
+@app.route(route="list-results", methods=["GET", "OPTIONS"])
+async def list_results(req: func.HttpRequest) -> func.HttpResponse:
+    """過去の処理結果一覧を取得"""
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=200, headers=CORS_HEADERS)
+    
+    try:
+        blob_service_client = get_blob_service_client()
+        ensure_container_exists("results")
+        ensure_container_exists("progress")
+        results_container = blob_service_client.get_container_client("results")
+        progress_container = blob_service_client.get_container_client("progress")
+        
+        results = []
+        seen_ids = set()
+        
+        for blob in results_container.list_blobs():
+            instance_id = blob.name.split("/")[0]
+            if instance_id in seen_ids:
+                continue
+            seen_ids.add(instance_id)
+            
+            # 進捗情報から詳細を取得
+            try:
+                progress_blob = progress_container.get_blob_client(f"{instance_id}.json")
+                progress_data = json.loads(progress_blob.download_blob().readall())
+                timestamp = progress_data.get("timestamp", "")
+            except:
+                timestamp = blob.last_modified.isoformat() if blob.last_modified else ""
+            
+            results.append({
+                "instanceId": instance_id,
+                "filename": blob.name.split("/")[-1],
+                "timestamp": timestamp,
+                "size": blob.size
+            })
+        
+        results.sort(key=lambda x: x["timestamp"], reverse=True)
+        
+        return func.HttpResponse(
+            json.dumps(results, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=200,
+            headers=CORS_HEADERS
+        )
+    except Exception as e:
+        logging.error(f"List results error: {e}")
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=500,
+            headers=CORS_HEADERS
+        )
+
 # ==================== Download ====================
 # Download関数は、生成されたZIPファイルをダウンロードするエンドポイント。
 # フロントエンドは、ジョブ完了後にこのエンドポイントを呼び出してファイルを取得する。
@@ -715,3 +770,43 @@ async def download_result(req: func.HttpRequest) -> func.HttpResponse:
         # ダウンロードエラー（Blob Storage接続エラー、権限不足など）
         logging.error(f"Download error: {e}")
         return func.HttpResponse(f"エラー: {str(e)}", status_code=500, headers=CORS_HEADERS)
+
+# ==================== Delete Result ====================
+@app.route(route="delete/{instanceId}", methods=["DELETE", "OPTIONS"])
+async def delete_result(req: func.HttpRequest) -> func.HttpResponse:
+    """処理結果を削除"""
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=200, headers=CORS_HEADERS)
+    
+    instance_id = req.route_params.get("instanceId")
+    
+    try:
+        blob_service_client = get_blob_service_client()
+        
+        # resultsコンテナから削除
+        container_client = blob_service_client.get_container_client("results")
+        blobs = list(container_client.list_blobs(name_starts_with=f"{instance_id}/"))
+        for blob in blobs:
+            container_client.delete_blob(blob.name)
+        
+        # progressコンテナから削除
+        try:
+            progress_client = blob_service_client.get_blob_client("progress", f"{instance_id}.json")
+            progress_client.delete_blob()
+        except:
+            pass
+        
+        return func.HttpResponse(
+            json.dumps({"message": "削除しました"}, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=200,
+            headers=CORS_HEADERS
+        )
+    except Exception as e:
+        logging.error(f"Delete error: {e}")
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=500,
+            headers=CORS_HEADERS
+        )

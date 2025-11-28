@@ -1,0 +1,87 @@
+const API_BASE_URL = 'http://localhost:7071/api';
+
+async function loadHistory() {
+    try {
+        const res = await fetch(`${API_BASE_URL}/list-results`);
+        if (!res.ok) throw new Error('履歴の取得に失敗しました');
+        
+        const results = await res.json();
+        const tbody = document.getElementById('historyBody');
+        
+        if (results.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4">履歴がありません</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = results.map(item => `
+            <tr>
+                <td>${formatDate(item.timestamp)}</td>
+                <td>${item.filename}</td>
+                <td>${formatSize(item.size)}</td>
+                <td>
+                    <button class="btn-download" onclick="download('${item.instanceId}')">ダウンロード</button>
+                    <button class="btn-delete" onclick="deleteItem('${item.instanceId}')">削除</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        document.getElementById('historyBody').innerHTML = 
+            `<tr><td colspan="4">エラー: ${err.message}</td></tr>`;
+    }
+}
+
+async function download(instanceId) {
+    try {
+        const res = await fetch(`${API_BASE_URL}/download/${instanceId}`);
+        if (!res.ok) throw new Error('ダウンロードに失敗しました');
+        
+        const blob = await res.blob();
+        const contentDisposition = res.headers.get('content-disposition');
+        let filename = 'result.zip';
+        
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename\*=UTF-8''(.+)/);
+            if (match) filename = decodeURIComponent(match[1]);
+        }
+        
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    } catch (err) {
+        alert(`エラー: ${err.message}`);
+    }
+}
+
+async function deleteItem(instanceId) {
+    if (!confirm('この結果を削除しますか？')) return;
+    
+    try {
+        const res = await fetch(`${API_BASE_URL}/delete/${instanceId}`, {
+            method: 'DELETE'
+        });
+        if (!res.ok) throw new Error('削除に失敗しました');
+        
+        loadHistory();
+    } catch (err) {
+        alert(`エラー: ${err.message}`);
+    }
+}
+
+function formatDate(isoString) {
+    if (!isoString) return '-';
+    const date = new Date(isoString);
+    return date.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+}
+
+function formatSize(bytes) {
+    if (!bytes) return '-';
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(2)} MB`;
+}
+
+loadHistory();
