@@ -138,7 +138,13 @@ async function pollStatus(instanceId) {
         const statusEndpoint = `${API_BASE_URL}/status/${instanceId}`;
         const res = await fetch(statusEndpoint);
         
-        if (!res.ok) return;
+        if (!res.ok) {
+            stopPolling();
+            progressContainer.style.display = "none";
+            status.textContent = `❌ サーバーエラー (${res.status})`;
+            uploadBtn.disabled = false;
+            return;
+        }
         
         const data = await res.json();
         
@@ -166,6 +172,10 @@ async function pollStatus(instanceId) {
         
     } catch (err) {
         console.error('ポーリングエラー:', err);
+        stopPolling();
+        progressContainer.style.display = "none";
+        status.textContent = `❌ サーバーエラー: ${err.message}`;
+        uploadBtn.disabled = false;
     }
 }
 
