@@ -1,6 +1,6 @@
 // ==================== 環境設定 ====================
-// const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
-const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
+const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
+// const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
 // ==================================================
 
 async function loadHistory() {
@@ -40,7 +40,7 @@ async function download(instanceId) {
         
         const blob = await res.blob();
         const contentDisposition = res.headers.get('content-disposition');
-        let filename = 'result.zip';
+        let filename = 'generated_files.zip';
         
         if (contentDisposition) {
             const match = contentDisposition.match(/filename\*=UTF-8''(.+)/);
