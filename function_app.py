@@ -486,7 +486,14 @@ def process_test_generation(inputData) -> dict:
             # - Excel/CSV変換
             # - ZIPファイル作成
             zip_bytes = normal_mode.generate_normal_test_spec(files, granularity, instance_id)
-            filename = "テスト仕様書.zip"
+            
+            # 複数ファイルの場合は_で連結、単一ファイルの場合はそのまま使用
+            from pathlib import Path
+            if len(files) == 1:
+                base_name = Path(files[0].filename).stem
+            else:
+                base_name = "_".join(Path(f.filename).stem for f in files)
+            filename = f"{base_name}_テスト仕様書.zip"
             
         else:
             # ========== 差分モード: 新旧設計書を比較してテスト仕様書の差分版を生成 ==========
@@ -528,7 +535,14 @@ def process_test_generation(inputData) -> dict:
             zip_bytes = diff_mode.generate_diff_test_spec(
                 files, old_structured_md, old_test_spec_md, granularity, instance_id
             )
-            filename = "テスト仕様書_差分版.zip"
+            
+            # 複数ファイルの場合は_で連結、単一ファイルの場合はそのまま使用
+            from pathlib import Path
+            if len(files) == 1:
+                base_name = Path(files[0].filename).stem
+            else:
+                base_name = "_".join(Path(f.filename).stem for f in files)
+            filename = f"{base_name}_テスト仕様書_差分版.zip"
         
         # ========== 6. 生成結果をBlob Storageに保存 ==========
         ensure_container_exists("results")  # resultsコンテナを作成

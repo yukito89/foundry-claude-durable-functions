@@ -1,3 +1,14 @@
+/**
+ * テスト仕様書生成アプリケーション - メインスクリプト
+ * 
+ * 機能:
+ * - Excel設計書のアップロード
+ * - 通常版/差分版のモード切り替え
+ * - バックエンドへのファイル送信
+ * - 10秒間隔で進捗ポーリング
+ * - 完了後の履歴ページへの誘導
+ */
+
 console.log('script.js実行開始');
 
 // ==================== 環境設定 ====================
@@ -5,23 +16,26 @@ const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境�
 // const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
 // ==================================================
 
-const status = document.querySelector("#status");
-const uploadBtn = document.querySelector("#uploadBtn");
-const progressBar = document.querySelector("#progressBar");
-const progressText = document.querySelector("#progressText");
-const progressContainer = document.querySelector("#progressContainer");
-const historyLink = document.querySelector("#historyLink");
+// ==================== DOM要素の取得 ====================
+const status = document.querySelector("#status");                     // ステータスメッセージ表示エリア
+const uploadBtn = document.querySelector("#uploadBtn");               // アップロードボタン
+const progressBar = document.querySelector("#progressBar");           // 進捗バー
+const progressText = document.querySelector("#progressText");         // 進捗テキスト
+const progressContainer = document.querySelector("#progressContainer"); // 進捗バーコンテナ
+const historyLink = document.querySelector("#historyLink");           // 履歴ページリンク
 
 console.log('DOM要素取得:', {status, uploadBtn, progressBar, progressText, progressContainer});
 
-let pollingInterval = null;
-let currentJobId = null;
+// ==================== グローバル変数 ====================
+let pollingInterval = null;  // ポーリング用タイマーID
+let currentJobId = null;     // 現在実行中のジョブID
 
-// モード切り替え
+// ==================== モード切り替え（通常版/差分版） ====================
 const modeRadios = document.querySelectorAll('input[name="mode"]');
-const normalMode = document.querySelector("#normalMode");
-const diffMode = document.querySelector("#diffMode");
+const normalMode = document.querySelector("#normalMode");  // 通常版ファイル入力エリア
+const diffMode = document.querySelector("#diffMode");      // 差分版ファイル入力エリア
 
+// モード変更時に表示を切り替え
 modeRadios.forEach(radio => {
     radio.addEventListener("change", () => {
         if (radio.value === "normal") {
@@ -34,7 +48,18 @@ modeRadios.forEach(radio => {
     });
 });
 
-// ユーザーがアップロードボタンをクリック
+// ==================== アップロード処理 ====================
+
+/**
+ * アップロードボタンクリック時の処理
+ * 
+ * 処理フロー:
+ * 1. モードと粒度を取得
+ * 2. ファイルをFormDataに追加
+ * 3. バックエンドに送信
+ * 4. instanceIdを取得
+ * 5. ポーリング開始
+ */
 uploadBtn.addEventListener("click", async () => {
     console.log('アップロードボタンクリック');
     const mode = document.querySelector('input[name="mode"]:checked').value;
@@ -42,7 +67,7 @@ uploadBtn.addEventListener("click", async () => {
     
     const formData = new FormData();
     
-    // 通常モード：設計書のみ
+    // 通常モード: 設計書のみアップロード
     if (mode === "normal") {
         const files = document.querySelector("#fileInput").files;
         if (files.length === 0) {
@@ -53,7 +78,7 @@ uploadBtn.addEventListener("click", async () => {
             formData.append("documentFiles", files[i]);
         }
     } 
-    // 差分モード：新版設計書 + 旧版MD2つ
+    // 差分モード: 新版設計書 + 旧版構造化設計書 + 旧版テスト仕様書
     else {
         const newExcelFiles = document.querySelector("#newExcelFiles").files;
         const oldStructuredMd = document.querySelector("#oldStructuredMd").files;
@@ -89,13 +114,14 @@ uploadBtn.addEventListener("click", async () => {
     progressBar.style.width = "0%";
     progressText.textContent = "処理を開始しています...";
 
-    // エンドポイント選択
+    // モードに応じてエンドポイントを切り替え
     const endpoint = mode === "normal" 
         ? `${API_BASE_URL}/upload`
         : `${API_BASE_URL}/upload_diff`;
 
     try {
-        // ジョブを開始（即座にinstanceIdを取得）
+        // バックエンドにファイルを送信（Durable Functionsのジョブを開始）
+        // 即座にinstanceIdが返却され、実際の処理はバックグラウンドで実行される
         const startRes = await fetch(endpoint, {
             method: "POST",
             body: formData,
@@ -112,11 +138,11 @@ uploadBtn.addEventListener("click", async () => {
         }
         
         const startData = await startRes.json();
-        const instanceId = startData.id; // Durable FunctionsのインスタンスID
+        const instanceId = startData.id; // Durable FunctionsのインスタンスID（ジョブID）
         currentJobId = instanceId;
         console.log('ジョブ開始:', instanceId);
         
-        // ポーリング開始
+        // 10秒間隔で進捗ポーリングを開始
         startPolling(instanceId);
         
     } catch (err) {
@@ -129,17 +155,38 @@ uploadBtn.addEventListener("click", async () => {
     }
 });
 
+// ==================== 進捗ポーリング ====================
+
+/**
+ * 進捗ポーリングを開始
+ * 
+ * @param {string} instanceId - ジョブID
+ * 
+ * 10秒間隔で/api/status/{instanceId}を呼び出し、
+ * 進捗状況を取得してUIを更新する
+ */
 function startPolling(instanceId) {
-    stopPolling();
+    stopPolling(); // 既存のポーリングを停止
     
+    // 10秒間隔でポーリング
     pollingInterval = setInterval(async () => {
         await pollStatus(instanceId);
-    }, 10000); // 10秒間隔
+    }, 10000);
     
     // 初回は即座に実行
     pollStatus(instanceId);
 }
 
+/**
+ * 進捗状況を取得してUIを更新
+ * 
+ * @param {string} instanceId - ジョブID
+ * 
+ * レスポンスに含まれる情報:
+ * - runtimeStatus: Running, Completed, Failed
+ * - customStatus: {stage, message, progress}
+ * - output: 完了時の結果情報
+ */
 async function pollStatus(instanceId) {
     try {
         const statusEndpoint = `${API_BASE_URL}/status/${instanceId}`;
@@ -157,12 +204,12 @@ async function pollStatus(instanceId) {
         
         const data = await res.json();
         
-        // 進捗更新
+        // 進捗情報があればUIを更新
         if (data.customStatus) {
             updateProgress(data.customStatus);
         }
         
-        // 完了時
+        // 処理完了時: ポーリング停止、履歴ページへのリンクを表示
         if (data.runtimeStatus === "Completed") {
             stopPolling();
             progressContainer.style.display = "none";
@@ -172,7 +219,7 @@ async function pollStatus(instanceId) {
             historyLink.style.opacity = "1";
         }
         
-        // 失敗時
+        // 処理失敗時: ポーリング停止、エラーメッセージ表示
         if (data.runtimeStatus === "Failed") {
             stopPolling();
             progressContainer.style.display = "none";
@@ -193,19 +240,36 @@ async function pollStatus(instanceId) {
     }
 }
 
+/**
+ * ポーリングを停止
+ * 
+ * 完了時やエラー時に呼び出される
+ */
 function stopPolling() {
     if (pollingInterval) {
         clearInterval(pollingInterval);
         pollingInterval = null;
     }
-    // currentJobIdはクリアしない（ポーリング中に必要）
+    // currentJobIdはクリアしない（履歴ページで使用する可能性がある）
 }
 
+// ==================== 進捗表示更新 ====================
+
+/**
+ * 進捗バーとメッセージを更新
+ * 
+ * @param {Object} data - 進捗情報
+ * @param {string} data.stage - 処理ステージ（structuring, perspectives, testspec等）
+ * @param {string} data.message - 表示メッセージ
+ * @param {number} data.progress - 進捗率（0-100）
+ */
 function updateProgress(data) {
     const { stage, message, progress } = data;
     
+    // 進捗バーの幅を更新
     progressBar.style.width = `${progress}%`;
     
+    // ステージごとの表示メッセージ
     const stageMessages = {
         "structuring": "📄 設計書を構造化中...",
         "diff": "🔍 差分を検知中...",
@@ -214,6 +278,7 @@ function updateProgress(data) {
         "converting": "🔄 成果物を変換中..."
     };
     
+    // メッセージと進捗率を表示
     const displayMessage = stageMessages[stage] || message;
     progressText.textContent = `${displayMessage} (${progress}%)`;
 }
