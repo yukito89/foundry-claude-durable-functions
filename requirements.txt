@@ -6,6 +6,6 @@ azure-functions
 azure-functions-durable
 pandas
 openpyxl
-anthropic
+openai
 python-dotenv
 azure-storage-blob

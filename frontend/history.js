@@ -9,8 +9,8 @@
  */
 
 // ==================== 環境設定 ====================
-const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
-// const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
+// const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
+const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
 // ==================================================
 
 // ==================== ページネーション設定 ====================

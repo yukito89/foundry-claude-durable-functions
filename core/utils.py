@@ -55,7 +55,9 @@ def process_excel_to_markdown(files, progress_callback=None, job_id=None) -> tup
             
             # シートの内容をテキスト化
             sheet_content = f"## {full_sheet_name}\n\n"
-            raw_text = '\n'.join(df.apply(lambda row: ' | '.join(row.astype(str).fillna('')), axis=1))
+            # nanを空文字列に置換し、空白セルを除外
+            df_clean = df.fillna('').replace('nan', '')
+            raw_text = '\n'.join(df_clean.apply(lambda row: ' | '.join([str(v) for v in row if str(v).strip()]), axis=1))
             structuring_prompt = f'--- Excelシート「{full_sheet_name}」 ---\n{raw_text}'
             
             # LLMで構造化
