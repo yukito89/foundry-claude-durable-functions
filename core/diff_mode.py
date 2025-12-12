@@ -5,6 +5,7 @@ import zipfile
 from core import llm_service
 from core import utils
 from core.progress_manager import ProgressManager
+from core.cost_calculator import calculate_cost
 
 def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_spec_md_file, granularity: str, job_id: str = None) -> bytes:
     """
@@ -42,18 +43,10 @@ def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_sp
     new_structured_md, total_usage = utils.process_excel_to_markdown(new_excel_files, progress_callback, job_id)
     
     # トークン使用量をログ出力
+    structuring_cost = calculate_cost(total_usage)
     logging.info(f"Markdown変換が完了 - 入力トークン: {total_usage['input_tokens']:,}, "
                  f"出力トークン: {total_usage['output_tokens']:,}, モデル: {total_usage['model']}")
-    
-    # コスト計算
-    if "haiku" in total_usage['model'].lower():
-        cost = (total_usage['input_tokens'] / 1_000_000 * 1.00) + (total_usage['output_tokens'] / 1_000_000 * 5.00)
-    elif "sonnet" in total_usage['model'].lower():
-        cost = (total_usage['input_tokens'] / 1_000_000 * 3.00) + (total_usage['output_tokens'] / 1_000_000 * 15.00)
-    else:
-        cost = 0
-    
-    logging.info(f"構造化コスト: ${cost:.4f}")
+    logging.info(f"構造化コスト: ${structuring_cost:.4f}")
     
     # Step 2: 旧版情報の取得
     # アップロードされた旧版ファイルを読み込む
@@ -67,8 +60,12 @@ def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_sp
     # LLMを使用して旧版と新版の設計書を比較し、変更点を抽出
     logging.info("差分検知中...")
     diff_prompt = f"【旧版設計書】\n{old_structured_md}\n\n【新版設計書】\n{new_structured_md}"
-    diff_summary = llm_service.detect_diff(diff_prompt)
-    logging.info("差分検知完了。")
+    diff_summary, diff_usage = llm_service.detect_diff(diff_prompt)
+    
+    diff_cost = calculate_cost(diff_usage)
+    logging.info(f"差分検知完了 - 入力: {diff_usage['input_tokens']:,}tok, "
+                 f"出力: {diff_usage['output_tokens']:,}tok, モデル: {diff_usage['model']}")
+    logging.info(f"差分検知コスト: ${diff_cost:.4f}")
     
     # Step 4: テスト観点抽出（差分考慮）
     if progress:
@@ -78,17 +75,10 @@ def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_sp
     perspectives_prompt = f"【新版設計書】\n{new_structured_md}\n\n【変更差分】\n{diff_summary}"
     test_perspectives, perspectives_usage = llm_service.extract_perspectives_with_diff(perspectives_prompt)
     
+    perspectives_cost = calculate_cost(perspectives_usage)
     logging.info(f"テスト観点抽出完了 - 入力: {perspectives_usage['input_tokens']:,}tok, "
-                 f"出力: {perspectives_usage['output_tokens']:,}tok")
-    
-    if "haiku" in perspectives_usage['model'].lower():
-        cost = (perspectives_usage['input_tokens'] / 1_000_000 * 1.00) + (perspectives_usage['output_tokens'] / 1_000_000 * 5.00)
-    elif "sonnet" in perspectives_usage['model'].lower():
-        cost = (perspectives_usage['input_tokens'] / 1_000_000 * 3.00) + (perspectives_usage['output_tokens'] / 1_000_000 * 15.00)
-    else:
-        cost = 0
-    
-    logging.info(f"観点抽出コスト: ${cost:.4f}")
+                 f"出力: {perspectives_usage['output_tokens']:,}tok, モデル: {perspectives_usage['model']}")
+    logging.info(f"観点抽出コスト: ${perspectives_cost:.4f}")
     
     # Step 5: テスト仕様書生成（差分・旧版考慮）
     if progress:
@@ -103,17 +93,10 @@ def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_sp
     )
     test_spec_md, testspec_usage = llm_service.create_test_spec_with_diff(spec_prompt)
     
+    testspec_cost = calculate_cost(testspec_usage)
     logging.info(f"テスト仕様書生成完了 - 入力: {testspec_usage['input_tokens']:,}tok, "
-                 f"出力: {testspec_usage['output_tokens']:,}tok")
-    
-    if "haiku" in testspec_usage['model'].lower():
-        cost = (testspec_usage['input_tokens'] / 1_000_000 * 1.00) + (testspec_usage['output_tokens'] / 1_000_000 * 5.00)
-    elif "sonnet" in testspec_usage['model'].lower():
-        cost = (testspec_usage['input_tokens'] / 1_000_000 * 3.00) + (testspec_usage['output_tokens'] / 1_000_000 * 15.00)
-    else:
-        cost = 0
-    
-    logging.info(f"仕様書生成コスト: ${cost:.4f}")
+                 f"出力: {testspec_usage['output_tokens']:,}tok, モデル: {testspec_usage['model']}")
+    logging.info(f"仕様書生成コスト: ${testspec_cost:.4f}")
     
     # Step 6: 成果物の変換
     if progress:
@@ -138,12 +121,7 @@ def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_sp
     zip_bytes = zip_buffer.read()
     
     # 合計コストを計算
-    total_cost = 0
-    for usage in [total_usage, perspectives_usage, testspec_usage]:
-        if "haiku" in usage['model'].lower():
-            total_cost += (usage['input_tokens'] / 1_000_000 * 1.00) + (usage['output_tokens'] / 1_000_000 * 5.00)
-        elif "sonnet" in usage['model'].lower():
-            total_cost += (usage['input_tokens'] / 1_000_000 * 3.00) + (usage['output_tokens'] / 1_000_000 * 15.00)
+    total_cost = structuring_cost + diff_cost + perspectives_cost + testspec_cost
     
     logging.info("差分版ZIPファイルの作成が完了しました。")
     logging.info(f"=== 合計コスト: ${total_cost:.4f} ===")

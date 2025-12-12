@@ -83,8 +83,12 @@ def call_llm(system_prompt: str, user_prompt: str, model: str, max_retries: int 
         try:
             # Azure OpenAI SDK を呼び出し（ストリーミング有効）
             result = ""
+            input_tokens = 0
+            output_tokens = 0
+            
             response = openai_client.chat.completions.create(
                 stream=True,
+                stream_options={"include_usage": True},  # ストリーミング時も使用量情報を取得
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -93,14 +97,18 @@ def call_llm(system_prompt: str, user_prompt: str, model: str, max_retries: int 
                 model=model
             )
             
-            for update in response:
-                if update.choices:
-                    result += update.choices[0].delta.content or ""
+            for chunk in response:
+                if chunk.choices:
+                    result += chunk.choices[0].delta.content or ""
+                # 最後のチャンクに使用量情報が含まれる
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    input_tokens = chunk.usage.prompt_tokens
+                    output_tokens = chunk.usage.completion_tokens
             
-            # 使用量情報を取得（ストリーミング時は概算）
+            # 正確な使用量情報を取得
             usage_info = {
-                "input_tokens": len(system_prompt + user_prompt) // 4,
-                "output_tokens": len(result) // 4,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
                 "model": model
             }
             return result, usage_info
@@ -160,10 +168,13 @@ def create_test_spec(prompt: str, granularity: str = "simple") -> tuple[str, dic
     system_prompt = CREATE_TEST_SPEC_PROMPT_DETAILED if granularity == "detailed" else CREATE_TEST_SPEC_PROMPT_SIMPLE
     return call_llm(system_prompt, prompt, model_test_spec)
 
-def detect_diff(prompt: str) -> str:
-    """旧版と新版の設計書から差分を検知"""
-    result, _ = call_llm(DIFF_DETECTION_PROMPT, prompt, model_diff_detection)
-    return result
+def detect_diff(prompt: str) -> tuple[str, dict]:
+    """旧版と新版の設計書から差分を検知
+    
+    Returns:
+        tuple[str, dict]: (差分サマリー, 使用量情報)
+    """
+    return call_llm(DIFF_DETECTION_PROMPT, prompt, model_diff_detection)
 
 def extract_perspectives_with_diff(prompt: str) -> tuple[str, dict]:
     """差分を考慮してテスト観点を抽出（差分モード用）
