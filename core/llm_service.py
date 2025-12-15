@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from openai import AzureOpenAI, RateLimitError, APIError
+from anthropic import AnthropicFoundry
 from dotenv import load_dotenv
 
 from prompts import (
@@ -17,10 +17,9 @@ from prompts import (
 # .envファイルから環境変数を読み込む
 load_dotenv()
 
-# --- Azure OpenAI SDK 接続情報 ---
-azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
-azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+# --- Anthropic SDK 接続情報 ---
+azure_api_key = os.getenv("AZURE_FOUNDRY_API_KEY")
+azure_endpoint = os.getenv("AZURE_FOUNDRY_ENDPOINT")
 
 # --- モデル選択 ---
 model_structuring = os.getenv("MODEL_STRUCTURING")
@@ -29,7 +28,7 @@ model_test_spec = os.getenv("MODEL_TEST_SPEC")
 model_diff_detection = os.getenv("MODEL_DIFF_DETECTION")
 
 # LLMクライアントの初期化用変数（遅延初期化）
-openai_client = None
+anthropic_client = None
 
 def validate_env():
     """必須環境変数のチェック関数
@@ -39,26 +38,25 @@ def validate_env():
     """
     required = [azure_api_key, azure_endpoint, model_structuring, model_test_perspectives, model_test_spec, model_diff_detection]
     if not all(required):
-        raise ValueError("Azure OpenAI の必須環境変数が設定されていません。")
+        raise ValueError("Anthropic の必須環境変数が設定されていません。")
 
 def initialize_client():
     """LLMクライアントの初期化関数
     
     初回呼び出し時のみ実行される（遅延初期化）
     """
-    global openai_client
+    global anthropic_client
     validate_env()
     
-    # Azure OpenAI SDK のクライアントを初期化
-    openai_client = AzureOpenAI(
+    # Anthropic SDK のクライアントを初期化
+    anthropic_client = AnthropicFoundry(
         api_key=azure_api_key,
-        azure_endpoint=azure_endpoint,
-        api_version=azure_api_version
+        base_url=azure_endpoint
     )
 
 def call_llm(system_prompt: str, user_prompt: str, model: str, max_retries: int = 10) -> tuple[str, dict]:
     """
-    Azure OpenAI SDK を呼び出す共通関数
+    Anthropic SDK を呼び出す共通関数
     
     Args:
         system_prompt: システムプロンプト（LLMの役割や指示）
@@ -73,39 +71,35 @@ def call_llm(system_prompt: str, user_prompt: str, model: str, max_retries: int 
     Raises:
         RuntimeError: API呼び出しに失敗した場合
     """
-    global openai_client
+    global anthropic_client
     
     # クライアントが未初期化の場合は初期化
-    if openai_client is None:
+    if anthropic_client is None:
         initialize_client()
     
     for attempt in range(max_retries):
         try:
-            # Azure OpenAI SDK を呼び出し（ストリーミング有効）
+            # Anthropic SDK を呼び出し（ストリーミング有効）
             result = ""
             input_tokens = 0
             output_tokens = 0
             
-            response = openai_client.chat.completions.create(
-                stream=True,
-                stream_options={"include_usage": True},  # ストリーミング時も使用量情報を取得
+            with anthropic_client.messages.stream(
+                model=model,
+                max_tokens=64000,
+                system=system_prompt,
                 messages=[
-                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                max_completion_tokens=128000,
-                model=model
-            )
+                ]
+            ) as stream:
+                for text in stream.text_stream:
+                    result += text
+                
+                # 最終メッセージから使用量情報を取得
+                message = stream.get_final_message()
+                input_tokens = message.usage.input_tokens
+                output_tokens = message.usage.output_tokens
             
-            for chunk in response:
-                if chunk.choices:
-                    result += chunk.choices[0].delta.content or ""
-                # 最後のチャンクに使用量情報が含まれる
-                if hasattr(chunk, 'usage') and chunk.usage:
-                    input_tokens = chunk.usage.prompt_tokens
-                    output_tokens = chunk.usage.completion_tokens
-            
-            # 正確な使用量情報を取得
             usage_info = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -113,28 +107,23 @@ def call_llm(system_prompt: str, user_prompt: str, model: str, max_retries: int 
             }
             return result, usage_info
 
-        except RateLimitError as e:
-            # Azure OpenAI SDKのレート制限エラー
-            if attempt < max_retries - 1:
-                wait_time = min((2 ** attempt) * 3 + (attempt * 5), 120)
-                logging.warning(f"Azure OpenAI API レート制限エラー。{wait_time}秒後にリトライします（{attempt + 1}/{max_retries}）")
-                time.sleep(wait_time)
-                continue
-            else:
-                logging.error("Azure OpenAI API呼び出しが最大リトライ回数に達しました")
-                raise RuntimeError("Azure OpenAI APIのレート制限エラー。時間をおいて再試行してください。")
-        
-        except APIError as e:
-            # Azure OpenAI SDKのAPIエラー（レート制限以外）
-            logging.error(f"Azure OpenAI API呼び出し中にエラーが発生しました: {str(e)}")
-            raise RuntimeError(f"Azure OpenAI API呼び出しに失敗しました: {str(e)}")
-        
         except Exception as e:
-            # その他の予期しないエラー
-            logging.error(f"予期しないエラーが発生しました: {str(e)}")
-            raise RuntimeError(f"LLM呼び出し中に予期しないエラーが発生しました: {str(e)}")
+            # レート制限エラーの場合はリトライ
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                if attempt < max_retries - 1:
+                    wait_time = min((2 ** attempt) * 3 + (attempt * 5), 120)
+                    logging.warning(f"Anthropic API レート制限エラー。{wait_time}秒後にリトライします（{attempt + 1}/{max_retries}）")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logging.error("Anthropic API呼び出しが最大リトライ回数に達しました")
+                    raise RuntimeError("Anthropic APIのレート制限エラー。時間をおいて再試行してください。")
+            
+            # その他のエラー
+            logging.error(f"Anthropic API呼び出し中にエラーが発生しました: {str(e)}")
+            raise RuntimeError(f"Anthropic API呼び出しに失敗しました: {str(e)}")
     
-    raise RuntimeError("Azure OpenAI API呼び出しに失敗しました")
+    raise RuntimeError("Anthropic API呼び出しに失敗しました")
 
 
 # --- ビジネスロジック固有のLLM呼び出し関数 ---

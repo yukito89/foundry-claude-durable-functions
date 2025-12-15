@@ -1,14 +1,12 @@
 # モデル別の料金設定（USD per 1M tokens）
 PRICING = {
-    "gpt-5-mini": {
-        "input": 0.250,
-        "cached_input": 0.025,
-        "output": 2.000
+    "claude-haiku-4-5": {
+        "input": 1.0,
+        "output": 5.0
     },
-    "gpt5.2": {
-        "input": 1.750,
-        "cached_input": 0.175,
-        "output": 14.000
+    "claude-sonnet-4-5": {
+        "input": 3.0,
+        "output": 15.0
     }
 }
 
@@ -27,17 +25,12 @@ def calculate_cost(usage_info: dict) -> float:
     output_tokens = usage_info.get("output_tokens", 0)
     
     # モデル名からプライシング情報を取得
-    pricing = None
-    if model == "gpt-5-mini":
-        pricing = PRICING["gpt-5-mini"]
-    elif model == "gpt-5.2":
-        pricing = PRICING["gpt5.2"]
-    else:
+    pricing = PRICING.get(model)
+    if not pricing:
         return 0.0
     
-    # コスト計算（キャッシュは考慮せず通常料金で計算）
+    # コスト計算
     input_cost = (input_tokens / 1_000_000) * pricing["input"]
     output_cost = (output_tokens / 1_000_000) * pricing["output"]
-    total_cost = input_cost + output_cost
     
-    return total_cost
+    return input_cost + output_cost
