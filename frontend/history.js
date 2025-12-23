@@ -9,14 +9,11 @@
  */
 
 // ==================== 環境設定 ====================
-const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
-// const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
+// const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
+const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
 // ==================================================
 
-// ==================== ページネーション設定 ====================
-const ITEMS_PER_PAGE = 5;   // 1ページあたりの表示件数
 let allResults = [];        // 全ての履歴データ
-let currentPage = 1;        // 現在のページ番号
 
 // ==================== 履歴データの読み込み ====================
 
@@ -40,7 +37,6 @@ async function loadHistory() {
             return timeB.localeCompare(timeA);
         });
         
-        currentPage = 1;
         renderPage();
     } catch (err) {
         document.getElementById('historyBody').innerHTML = 
@@ -50,32 +46,16 @@ async function loadHistory() {
 
 // ==================== ページレンダリング ====================
 
-/**
- * 現在のページをレンダリング
- * 
- * 処理フロー:
- * 1. 現在のページに該当するデータを抽出
- * 2. テーブルにHTMLを生成
- * 3. ページネーションボタンを生成
- */
 function renderPage() {
     const tbody = document.getElementById('historyBody');
-    const pagination = document.getElementById('pagination');
     
     // 履歴が空の場合
     if (allResults.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8">履歴がありません</td></tr>';
-        pagination.innerHTML = '';
         return;
     }
     
-    // 現在のページに表示するデータを抽出
-    const totalPages = Math.ceil(allResults.length / ITEMS_PER_PAGE);
-    const start = (currentPage - 1) * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    const pageResults = allResults.slice(start, end);
-    
-    tbody.innerHTML = pageResults.map((item, index) => {
+    tbody.innerHTML = allResults.map((item, index) => {
         const startTime = item.start_time ? formatDate(item.start_time) : '-';
         const endTime = item.end_time ? formatDate(item.end_time) : '-';
         const inputTokens = item.token_stats?.total_input_tokens ? item.token_stats.total_input_tokens.toLocaleString() : '-';
@@ -96,46 +76,6 @@ function renderPage() {
             </td>
         </tr>
     `}).join('');
-    
-    renderPagination(totalPages);
-}
-
-/**
- * ページネーションボタンを生成
- * 
- * @param {number} totalPages - 総ページ数
- */
-function renderPagination(totalPages) {
-    const pagination = document.getElementById('pagination');
-    
-    if (totalPages <= 1) {
-        pagination.innerHTML = '';
-        return;
-    }
-    
-    let html = `<button onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>PREV</button>`;
-    
-    for (let i = 1; i <= totalPages; i++) {
-        if (i === 1 || i === totalPages || Math.abs(i - currentPage) <= 1) {
-            html += `<button onclick="changePage(${i})" class="${i === currentPage ? 'active' : ''}">${i}</button>`;
-        } else if (i === currentPage - 2 || i === currentPage + 2) {
-            html += '<span>...</span>';
-        }
-    }
-    
-    html += `<button onclick="changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>NEXT</button>`;
-    
-    pagination.innerHTML = html;
-}
-
-/**
- * ページを変更
- * 
- * @param {number} page - 移動先のページ番号
- */
-function changePage(page) {
-    currentPage = page;
-    renderPage();
 }
 
 // ==================== ダウンロード処理 ====================
@@ -189,15 +129,8 @@ async function deleteItem(instanceId) {
         });
         if (!res.ok) throw new Error('削除に失敗しました');
         
-        // 削除したアイテムをリストから除外（採番は変わらない）
+        // 削除したアイテムをリストから除外
         allResults = allResults.filter(item => item.instanceId !== instanceId);
-        
-        // 現在のページが範囲外になった場合、最後のページに移動
-        const totalPages = Math.ceil(allResults.length / ITEMS_PER_PAGE);
-        if (currentPage > totalPages && totalPages > 0) {
-            currentPage = totalPages;
-        }
-        
         renderPage();
     } catch (err) {
         alert(`エラー: ${err.message}`);
