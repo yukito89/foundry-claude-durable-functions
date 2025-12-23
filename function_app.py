@@ -410,11 +410,12 @@ def process_test_generation(inputData) -> dict:
     # この関数は、coreモジュールのProgressManagerから呼び出される。
     # 開始時刻を記録（JST）
     from datetime import timezone, timedelta
+    import uuid
     jst = timezone(timedelta(hours=9))
     start_time = datetime.now(jst).isoformat()
     
-    # 採番用のタイムスタンプ（ミリ秒）
-    seq_number = int(datetime.now(jst).timestamp() * 1000)
+    # 採番用のUUID（完全版）
+    seq_number = str(uuid.uuid4())
     
     # トークン統計を記録する変数
     token_stats = {
@@ -769,7 +770,7 @@ async def list_results(req: func.HttpRequest) -> func.HttpResponse:
             })
         
         # seq_numberで降順ソート（最新が上）
-        results.sort(key=lambda x: x.get("seq_number", 0), reverse=True)
+        results.sort(key=lambda x: x.get("start_time", ""), reverse=True)
         
         return func.HttpResponse(
             json.dumps(results, ensure_ascii=False),

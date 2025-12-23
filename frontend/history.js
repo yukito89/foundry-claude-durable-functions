@@ -34,7 +34,11 @@ async function loadHistory() {
         allResults = await res.json();
         
         // seq_numberで降順ソート（最新が上）
-        allResults.sort((a, b) => b.seq_number - a.seq_number);
+        allResults.sort((a, b) => {
+            const timeA = a.start_time || '';
+            const timeB = b.start_time || '';
+            return timeB.localeCompare(timeA);
+        });
         
         currentPage = 1;
         renderPage();
@@ -235,16 +239,16 @@ function formatSize(bytes) {
 }
 
 /**
- * タイムスタンプを短いIDに変換
+ * UUIDを短いIDに変換
  * 
- * @param {number} seq_number - ミリ秒タイムスタンプ
- * @returns {string} 短いID（例: #000001）
+ * @param {string} seq_number - UUID完全版（例: "a1b2c3d4-5678-90ab-cdef-1234567890ab"）
+ * @returns {string} 短いID（例: #A1B2C3D4）
  */
 function formatSeqNumber(seq_number) {
     if (!seq_number) return '-';
-    // 下6桁を使用（100万までの範囲）
-    const shortId = seq_number % 1000000;
-    return `#${shortId.toString().padStart(6, '0')}`;
+    // 文字列に変換してから先頭8文字を取得
+    const str = String(seq_number);
+    return `${str.substring(0, 8).toUpperCase()}`;
 }
 
 // ==================== 初期化 ====================
