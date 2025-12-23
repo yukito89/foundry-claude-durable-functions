@@ -1,4 +1,4 @@
-# 設計書からのテスト仕様書自動生成アプリケーション（現在は単体テスト仕様書のみ対応可能、結合テスト仕様書にも対応予定）
+# 詳細設計書をもとに単体テスト仕様書自動生成アプリケーション
 
 このアプリケーションは、Excel形式の設計書をアップロードすると、LLM（大規模言語モデル）を利用して構造化された設計書、テスト観点、そして単体テスト仕様書を自動生成するAzure Functionsアプリケーションです。
 
@@ -39,7 +39,7 @@
 ┌─────────────────┐    ┌──────────────────────────────────┐    ┌─────────────────────┐
 │   フロントエンド │    │   バックエンド (Durable Functions)│    │   LLMサービス        │
 │                 │    │                                  │    │                     │
-│ Azure Static    │───▶│ Starter → Orchestrator          │───▶│ Azure AI Foundry    │
+│ Azure Static    │───▶│ Starter → Orchestrator           │───▶│ Azure AI Foundry    │
 │ Web Apps        │    │              ↓                   │    │ (Claude Sonnet 4.5) │
 │                 │    │           Activity               │    │                     │
 └─────────────────┘    └──────────────────────────────────┘    └─────────────────────┘
@@ -120,30 +120,6 @@ testgen-unit-diff/
 
 ---
 
-## 処理履歴機能
-
-### 概要
-処理結果はBlob Storageに1日間保存され、ブラウザを閉じた後でも履歴ページからダウンロードできます。
-
-### 使い方
-1. メインページ右上の「📋 処理履歴を見る」をクリック
-2. 過去の処理結果が一覧表示されます
-3. 「ダウンロード」ボタンで結果を取得
-4. 不要な結果は「削除」ボタンで削除可能
-
-### 利点
-- ✅ ブラウザを閉じても結果を取得可能
-- ✅ PCをスリープ/シャットダウンしても結果は保持される（本番環境）
-- ✅ 別のデバイスからでもアクセス可能
-- ✅ 複数の処理結果を管理できる
-
-### APIエンドポイント
-- `GET /api/list-results`: 処理結果一覧を取得
-- `GET /api/download/{instanceId}`: 結果をダウンロード
-- `DELETE /api/delete/{instanceId}`: 結果を削除
-
----
-
 ## 前提条件
 
 - [Python 3.11](https://www.python.org/downloads/release/python-3110/)
@@ -167,11 +143,28 @@ func --version  # インストール確認
 
 ### 2. Visual Studio Code 拡張機能のインストール
 
-以下の拡張機能をインストール:
-- **Azure Tools** (Microsoft)
-- **Python** (Microsoft)
-- **Pylance** (Microsoft)
-- **Live Server** (Ritwick Dey)
+以下の拡張機能をインストールしてください:
+
+#### Azure Tools (Microsoft)
+- VS Codeの拡張機能タブ（Ctrl+Shift+X）を開く
+- 「Azure Tools」で検索
+- Microsoft発行の「Azure Tools」をインストール
+- 用途: Azure Functionsのデプロイ・管理
+
+#### Python (Microsoft)
+- 「Python」で検索
+- Microsoft発行の「Python」をインストール
+- 用途: Pythonコードの実行・デバッグ
+
+#### Pylance (Microsoft)
+- 「Pylance」で検索
+- Microsoft発行の「Pylance」をインストール
+- 用途: Python言語サーバー（コード補完・型チェック）
+
+#### Live Server (Ritwick Dey)
+- 「Live Server」で検索
+- Ritwick Dey発行の「Live Server」をインストール
+- 用途: フロントエンドのローカルプレビュー（右クリック→「Open with Live Server」）
 
 ### 3. プロジェクトのセットアップ
 
@@ -202,13 +195,22 @@ pip install -r requirements.txt
 }
 ```
 
-**重要**: `AzureWebJobsStorage`と`AZURE_STORAGE_CONNECTION_STRING`には、[設定](#設定)セクションで取得したAzure Storageの接続文字列を設定してください。
+**重要**: `AzureWebJobsStorage`には、[設定](#設定)セクションで取得したAzure Storageの接続文字列を設定してください。
 
 ---
 
 ## 設定
 
-### 1. Azure Storage Accountの作成
+### 1. Azure AI Foundryの設定
+
+1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
+2. 新しいプロジェクトを作成
+3. 「Models + endpoints」→「+ Deploy model」
+4. 「Claude Sonnet 4.5」を検索して選択
+5. デプロイ名を設定（例: `claude-sonnet-4-5`）
+6. エンドポイントURLとAPIキーをメモ（後で`.env`に設定）
+
+### 2. Azure Storage Accountの作成
 
 #### ストレージアカウントの作成
 
@@ -227,7 +229,7 @@ pip install -r requirements.txt
 2. 「アクセスキー」→「キーの表示」
 3. **key1**の「接続文字列」をコピー
 
-### 2. .envファイルの設定
+### 3. .envファイルの設定
 
 `.env.example`をコピーして`.env`を作成:
 
@@ -251,15 +253,6 @@ MODEL_DIFF_DETECTION=claude-sonnet-4-5
 # Azure Storage 接続情報
 AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
 ```
-
-### 3. Azure AI Foundryの設定
-
-1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
-2. 新しいプロジェクトを作成
-3. 「Models + endpoints」→「+ Deploy model」
-4. 「Claude Sonnet 4.5」を検索して選択
-5. デプロイ名を設定（例: `claude-sonnet-4-5`）
-6. エンドポイントURLとAPIキーを`.env`に設定
 
 ---
 
@@ -287,15 +280,15 @@ func start
 
 **重要**: 以下のプランが必要です（Consumptionプランでは動作しません）:
 
+- **Flex Consumption** ← 本アプリで使用：使用量に応じた従量課金でコスト効率が高い
 - **Premium プラン（EP1）**: 約 ¥20,000/月
-- **Flex Consumption**: 使用量に応じた従量課金
 - **Dedicated (App Service)**: 既存のApp Serviceプランを流用可能
 
 ### バックエンド（Azure Functions）のデプロイ
 
 1. **Function Appの作成**
-   - VS Codeの「Azure」→「Functions」を右クリック
-   - 「Create Function App in Azure...」を選択
+   - VS Codeのサイドバーの「Azure」アイコンをクリック（Azure Tools拡張機能が必要）
+   - 「Functions」を右クリック→「Create Function App in Azure」を選択
    - アプリ名、Pythonバージョン（**3.11**）、リージョンを指定
 
 2. **デプロイ**
@@ -313,14 +306,26 @@ func start
      - `MODEL_TEST_SPEC`
      - `MODEL_DIFF_DETECTION`
      - `AZURE_STORAGE_CONNECTION_STRING`
-     - **`AzureWebJobsStorage`** ← Durable Functions用（`AZURE_STORAGE_CONNECTION_STRING`と同じ値）
+     - **`AzureWebJobsStorage`** ← デプロイ時に自動設定済み
 
 ### フロントエンド（Azure Static Web Apps）のデプロイ
 
-1. `frontend/script.js`のエンドポイントURLを本番環境に変更
-2. GitHubにプッシュ
-3. Azureポータルで「Static Web App」を作成
-4. GitHubリポジトリと連携してデプロイ
+1. **エンドポイントURLの確認と変更**
+   - AzureポータルでデプロイしたFunction Appを開く
+   - 「概要」ページの「URL」をコピー（例: `https://your-function-app.azurewebsites.net`）
+   - `frontend/script.js`と`frontend/history.js`の`API_BASE_URL`をコピーしたURLに変更
+
+2. **Static Web Appの作成**
+   - VS Codeのサイドバーの「Azure」アイコンをクリック（Azure Tools拡張機能が必要）
+   - 「Static Web Apps」を右クリック→「Create Static Web App (Advanced)...」を選択
+   - アプリ名、リージョン、GitHubリポジトリを選択
+   - ビルド設定:
+     - **App location**: `/frontend`
+     - **Api location**: 空欄
+     - **Output location**: `/frontend`
+
+3. **デプロイ**
+   - GitHub Actionsが自動でトリガーされ、デプロイが実行されます
 
 ---
 
