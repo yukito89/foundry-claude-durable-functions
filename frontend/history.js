@@ -9,8 +9,8 @@
  */
 
 // ==================== 環境設定 ====================
-const API_BASE_URL = 'https://claude-func.azurewebsites.net/api'; // 本番環境用
-// const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
+// const API_BASE_URL = 'https://poc-func.azurewebsites.net/api'; // 本番環境用
+const API_BASE_URL = 'http://localhost:7071/api'; // ローカル開発用
 // ==================================================
 
 // ==================== ページネーション設定 ====================
@@ -32,6 +32,10 @@ async function loadHistory() {
         if (!res.ok) throw new Error('履歴の取得に失敗しました');
         
         allResults = await res.json();
+        
+        // seq_numberで降順ソート（最新が上）
+        allResults.sort((a, b) => b.seq_number - a.seq_number);
+        
         currentPage = 1;
         renderPage();
     } catch (err) {
@@ -56,7 +60,7 @@ function renderPage() {
     
     // 履歴が空の場合
     if (allResults.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4">履歴がありません</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8">履歴がありません</td></tr>';
         pagination.innerHTML = '';
         return;
     }
@@ -67,17 +71,27 @@ function renderPage() {
     const end = start + ITEMS_PER_PAGE;
     const pageResults = allResults.slice(start, end);
     
-    tbody.innerHTML = pageResults.map(item => `
+    tbody.innerHTML = pageResults.map((item, index) => {
+        const startTime = item.start_time ? formatDate(item.start_time) : '-';
+        const endTime = item.end_time ? formatDate(item.end_time) : '-';
+        const inputTokens = item.token_stats?.total_input_tokens ? item.token_stats.total_input_tokens.toLocaleString() : '-';
+        const outputTokens = item.token_stats?.total_output_tokens ? item.token_stats.total_output_tokens.toLocaleString() : '-';
+        
+        return `
         <tr>
-            <td>${formatDate(item.timestamp)}</td>
+            <td>${formatSeqNumber(item.seq_number)}</td>
+            <td>${startTime}</td>
+            <td>${endTime}</td>
             <td>${item.filename}</td>
             <td>${formatSize(item.size)}</td>
+            <td>${inputTokens}</td>
+            <td>${outputTokens}</td>
             <td>
                 <button class="btn-download" onclick="download('${item.instanceId}')">ダウンロード</button>
                 <button class="btn-delete" onclick="deleteItem('${item.instanceId}')">削除</button>
             </td>
         </tr>
-    `).join('');
+    `}).join('');
     
     renderPagination(totalPages);
 }
@@ -131,18 +145,14 @@ function changePage(page) {
  */
 async function download(instanceId) {
     try {
+        // 履歴データからファイル名を取得
+        const item = allResults.find(r => r.instanceId === instanceId);
+        const filename = item ? item.filename : 'テスト仕様書.zip';
+        
         const res = await fetch(`${API_BASE_URL}/download/${instanceId}`);
         if (!res.ok) throw new Error('ダウンロードに失敗しました');
         
         const blob = await res.blob();
-        const contentDisposition = res.headers.get('content-disposition');
-        let filename = 'generated_files.zip';
-        
-        if (contentDisposition) {
-            const match = contentDisposition.match(/filename\*=UTF-8''(.+)/);
-            if (match) filename = decodeURIComponent(match[1]);
-        }
-        
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -175,7 +185,7 @@ async function deleteItem(instanceId) {
         });
         if (!res.ok) throw new Error('削除に失敗しました');
         
-        // 削除したアイテムをリストから除外
+        // 削除したアイテムをリストから除外（採番は変わらない）
         allResults = allResults.filter(item => item.instanceId !== instanceId);
         
         // 現在のページが範囲外になった場合、最後のページに移動
@@ -195,17 +205,14 @@ async function deleteItem(instanceId) {
 /**
  * ISO形式の日時を日本語形式に変換
  * 
- * @param {string} isoString - ISO 8601形式の日時文字列
+ * @param {string} isoString - ISO 8601形式の日時文字列（JST）
  * @returns {string} 日本語形式の日時（YYYY/MM/DD HH:MM:SS）
  */
 function formatDate(isoString) {
     if (!isoString) return '-';
     const date = new Date(isoString);
     
-    // UTC時刻をJST（日本標準時）に変換（+9時間）
-    const jstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
-    
-    return jstDate.toLocaleString('ja-JP', { 
+    return date.toLocaleString('ja-JP', { 
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -225,6 +232,19 @@ function formatSize(bytes) {
     if (!bytes) return '-';
     const mb = bytes / (1024 * 1024);
     return `${mb.toFixed(2)} MB`;
+}
+
+/**
+ * タイムスタンプを短いIDに変換
+ * 
+ * @param {number} seq_number - ミリ秒タイムスタンプ
+ * @returns {string} 短いID（例: #000001）
+ */
+function formatSeqNumber(seq_number) {
+    if (!seq_number) return '-';
+    // 下6桁を使用（100万までの範囲）
+    const shortId = seq_number % 1000000;
+    return `#${shortId.toString().padStart(6, '0')}`;
 }
 
 // ==================== 初期化 ====================

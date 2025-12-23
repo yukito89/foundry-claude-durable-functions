@@ -193,7 +193,6 @@ pip install -r requirements.txt
     "IsEncrypted": false,
     "Values": {
         "AzureWebJobsStorage": "<Azure Storage接続文字列>",
-        "AZURE_STORAGE_CONNECTION_STRING": "<Azure Storage接続文字列>",
         "FUNCTIONS_WORKER_RUNTIME": "python",
         "AzureWebJobsSecretStorageType": "files"
     },

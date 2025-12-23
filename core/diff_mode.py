@@ -7,18 +7,19 @@ from core import utils
 from core.progress_manager import ProgressManager
 from core.cost_calculator import calculate_cost
 
-def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_spec_md_file, granularity: str, job_id: str = None) -> bytes:
+def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_spec_md_file, granularity: str, job_id: str = None) -> tuple[bytes, dict]:
     """
-    差分モードでテスト仕様書一式を生成し、ZIPファイルのバイナリデータを返す
+    差分モードでテスト仕様書一式を生成し、ZIPファイルのバイナリデータとトークン統計を返す
     
     Args:
         new_excel_files: 新版設計書のExcelファイルリスト
         old_structured_md_file: 旧版構造化設計書のMarkdownファイル
         old_test_spec_md_file: 旧版テスト仕様書のMarkdownファイル
         granularity: テスト粒度（"simple" or "detailed"）
+        job_id: ジョブID
     
     Returns:
-        bytes: 生成された成果物を含むZIPファイルのバイナリデータ
+        tuple[bytes, dict]: (ZIPファイルのバイナリデータ, トークン統計)
     """
     logging.info("差分版テスト生成を開始します。")
     logging.info(f"Job ID: {job_id}")
@@ -126,7 +127,13 @@ def generate_diff_test_spec(new_excel_files, old_structured_md_file, old_test_sp
     logging.info("差分版ZIPファイルの作成が完了しました。")
     logging.info(f"=== 合計コスト: ${total_cost:.4f} ===")
     
+    # トークン統計を集計
+    token_stats = {
+        "total_input_tokens": total_usage["input_tokens"] + diff_usage["input_tokens"] + perspectives_usage["input_tokens"] + testspec_usage["input_tokens"],
+        "total_output_tokens": total_usage["output_tokens"] + diff_usage["output_tokens"] + perspectives_usage["output_tokens"] + testspec_usage["output_tokens"]
+    }
+    
     if progress:
         progress.update_progress(job_id, "completed", "完了しました", 100)
     
-    return zip_bytes
+    return zip_bytes, token_stats

@@ -408,15 +408,35 @@ def process_test_generation(inputData) -> dict:
     # Orchestrator内ではBlob Storageへの直接アクセスが禁止されているため、
     # Activity関数内で進捗情報をBlob Storageに保存する。
     # この関数は、coreモジュールのProgressManagerから呼び出される。
-    def update_progress_direct(stage, message, progress):
+    # 開始時刻を記録（JST）
+    from datetime import timezone, timedelta
+    jst = timezone(timedelta(hours=9))
+    start_time = datetime.now(jst).isoformat()
+    
+    # 採番用のタイムスタンプ（ミリ秒）
+    seq_number = int(datetime.now(jst).timestamp() * 1000)
+    
+    # トークン統計を記録する変数
+    token_stats = {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0
+    }
+    
+    def update_progress_direct(stage, message, progress, token_usage=None):
         """進捗情報をBlob Storage（progressコンテナ）に保存
         
         Args:
             stage: 処理ステージ（structuring, perspectives, testspec, converting, completed）
             message: 表示メッセージ
             progress: 進捗率（0-100）
+            token_usage: トークン使用量（オプション）
         """
         try:
+            # トークン統計を更新
+            if token_usage:
+                token_stats["total_input_tokens"] += token_usage.get("input_tokens", 0)
+                token_stats["total_output_tokens"] += token_usage.get("output_tokens", 0)
+            
             blob_service_client = get_blob_service_client()
             ensure_container_exists("progress")  # progressコンテナを作成
             
@@ -426,7 +446,10 @@ def process_test_generation(inputData) -> dict:
                 "stage": stage,
                 "message": message,
                 "progress": progress,
-                "timestamp": datetime.utcnow().isoformat()  # UTC時刻
+                "timestamp": datetime.now(jst).isoformat(),
+                "start_time": start_time,
+                "seq_number": seq_number,
+                "token_stats": token_stats
             }
             blob_client.upload_blob(json.dumps(data, ensure_ascii=False), overwrite=True)
             logging.info(f"進捗更新: {stage} ({progress}%)")
@@ -485,7 +508,11 @@ def process_test_generation(inputData) -> dict:
             # - LLMでテスト仕様書生成
             # - Excel/CSV変換
             # - ZIPファイル作成
-            zip_bytes = normal_mode.generate_normal_test_spec(files, granularity, instance_id)
+            zip_bytes, core_token_stats = normal_mode.generate_normal_test_spec(files, granularity, instance_id)
+            
+            # トークン統計を更新
+            token_stats["total_input_tokens"] = core_token_stats["total_input_tokens"]
+            token_stats["total_output_tokens"] = core_token_stats["total_output_tokens"]
             
             # 複数ファイルの場合は_で連結、単一ファイルの場合はそのまま使用
             from pathlib import Path
@@ -532,9 +559,13 @@ def process_test_generation(inputData) -> dict:
             # - LLMで差分版テスト仕様書生成
             # - Excel/CSV変換
             # - ZIPファイル作成
-            zip_bytes = diff_mode.generate_diff_test_spec(
+            zip_bytes, core_token_stats = diff_mode.generate_diff_test_spec(
                 files, old_structured_md, old_test_spec_md, granularity, instance_id
             )
+            
+            # トークン統計を更新
+            token_stats["total_input_tokens"] = core_token_stats["total_input_tokens"]
+            token_stats["total_output_tokens"] = core_token_stats["total_output_tokens"]
             
             # 複数ファイルの場合は_で連結、単一ファイルの場合はそのまま使用
             from pathlib import Path
@@ -555,12 +586,29 @@ def process_test_generation(inputData) -> dict:
         
         logging.info(f"結果保存完了: {blob_name}")
         
+        # 終了時刻を記録（JST）
+        end_time = datetime.now(jst).isoformat()
+        
+        # 最終進捗情報を更新（終了時刻とトークン統計を含む）
+        update_progress_direct("completed", "完了しました", 100)
+        try:
+            blob_client = blob_service_client.get_blob_client("progress", f"{instance_id}.json")
+            progress_data = json.loads(blob_client.download_blob().readall())
+            progress_data["end_time"] = end_time
+            blob_client.upload_blob(json.dumps(progress_data, ensure_ascii=False), overwrite=True)
+        except Exception as e:
+            logging.error(f"終了時刻の記録失敗: {e}")
+        
         # ========== 7. Orchestratorに結果を返却 ==========
         # この情報は、Orchestratorの戻り値として/api/status/{instanceId}で取得可能
         return {
             "blob_name": blob_name,  # Blob Storage上のパス
             "filename": filename,  # ファイル名
-            "container": "results"  # コンテナ名
+            "container": "results",  # コンテナ名
+            "start_time": start_time,  # 開始時刻（JST）
+            "end_time": end_time,  # 終了時刻（JST）
+            "seq_number": seq_number,  # 採番
+            "token_stats": token_stats  # トークン統計
         }
         
     except Exception as e:
@@ -663,7 +711,18 @@ async def get_status(req: func.HttpRequest, client) -> func.HttpResponse:
 # ==================== List Results ====================
 @app.route(route="list-results", methods=["GET", "OPTIONS"])
 async def list_results(req: func.HttpRequest) -> func.HttpResponse:
-    """過去の処理結果一覧を取得"""
+    """過去の処理結果一覧を取得
+    
+    Returns:
+        JSON配列: 各要素は以下の情報を含む
+            - instanceId: ジョブID
+            - filename: ファイル名
+            - size: ファイルサイズ（バイト）
+            - start_time: 処理開始時刻（JST）
+            - end_time: 処理終了時刻（JST）
+            - seq_number: 採番（タイムスタンプベース）
+            - token_stats: トークン統計（total_input_tokens, total_output_tokens）
+    """
     if req.method == "OPTIONS":
         return func.HttpResponse(status_code=200, headers=CORS_HEADERS)
     
@@ -684,21 +743,33 @@ async def list_results(req: func.HttpRequest) -> func.HttpResponse:
             seen_ids.add(instance_id)
             
             # 進捗情報から詳細を取得
+            start_time = None
+            end_time = None
+            seq_number = None
+            token_stats = None
+            
             try:
                 progress_blob = progress_container.get_blob_client(f"{instance_id}.json")
                 progress_data = json.loads(progress_blob.download_blob().readall())
-                timestamp = progress_data.get("timestamp", "")
-            except:
-                timestamp = blob.last_modified.isoformat() if blob.last_modified else ""
+                start_time = progress_data.get("start_time")
+                end_time = progress_data.get("end_time")
+                seq_number = progress_data.get("seq_number")
+                token_stats = progress_data.get("token_stats")
+            except Exception as e:
+                logging.warning(f"進捗情報の取得失敗 ({instance_id}): {e}")
             
             results.append({
                 "instanceId": instance_id,
                 "filename": blob.name.split("/")[-1],
-                "timestamp": timestamp,
-                "size": blob.size
+                "size": blob.size,
+                "start_time": start_time,
+                "end_time": end_time,
+                "seq_number": seq_number or 0,
+                "token_stats": token_stats
             })
         
-        results.sort(key=lambda x: x["timestamp"], reverse=True)
+        # seq_numberで降順ソート（最新が上）
+        results.sort(key=lambda x: x.get("seq_number", 0), reverse=True)
         
         return func.HttpResponse(
             json.dumps(results, ensure_ascii=False),

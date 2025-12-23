@@ -8,16 +8,17 @@ from core import utils
 from core.progress_manager import ProgressManager
 from core.cost_calculator import calculate_cost
 
-def generate_normal_test_spec(files, granularity: str, job_id: str = None) -> bytes:
+def generate_normal_test_spec(files, granularity: str, job_id: str = None) -> tuple[bytes, dict]:
     """
-    通常モードでテスト仕様書一式を生成し、ZIPファイルのバイナリデータを返す
+    通常モードでテスト仕様書一式を生成し、ZIPファイルのバイナリデータとトークン統計を返す
     
     Args:
         files: アップロードされたExcelファイルのリスト
         granularity: テスト粒度（"simple" or "detailed"）
+        job_id: ジョブID
     
     Returns:
-        bytes: 生成された成果物を含むZIPファイルのバイナリデータ
+        tuple[bytes, dict]: (ZIPファイルのバイナリデータ, トークン統計)
     """
     logging.info(f"{len(files)}件のファイルから単体テスト生成（通常版）を開始します。")
     logging.info(f"Job ID: {job_id}")
@@ -101,7 +102,13 @@ def generate_normal_test_spec(files, granularity: str, job_id: str = None) -> by
     logging.info("ZIPファイルの作成が完了しました。")
     logging.info(f"=== 合計コスト: ${total_cost:.4f} ===")
     
+    # トークン統計を集計
+    token_stats = {
+        "total_input_tokens": total_usage["input_tokens"] + perspectives_usage["input_tokens"] + testspec_usage["input_tokens"],
+        "total_output_tokens": total_usage["output_tokens"] + perspectives_usage["output_tokens"] + testspec_usage["output_tokens"]
+    }
+    
     if progress:
         progress.update_progress(job_id, "completed", "完了しました", 100)
     
-    return zip_bytes
+    return zip_bytes, token_stats
