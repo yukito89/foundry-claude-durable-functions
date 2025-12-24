@@ -95,6 +95,7 @@ foundry-claude-durable-functions/
 │   ├── history.html         # 処理履歴ページ
 │   ├── script.js            # メインページロジック
 │   ├── history.js           # 履歴ページロジック
+│   ├── auth.js              # 認証処理
 │   └── style.css
 └── 単体テスト仕様書.xlsx     # Excelテンプレート
 ```
@@ -122,6 +123,8 @@ foundry-claude-durable-functions/
 ## 前提条件
 
 - [Python 3.11](https://www.python.org/downloads/release/python-3110/)
+- [Git](https://git-scm.com/downloads) （リポジトリのクローン・バージョン管理に必要）
+- [GitHub アカウント](https://github.com/signup) （Static Web Appsの自動デプロイに必要）
 - [Visual Studio Code](https://code.visualstudio.com/)
 - [Node.js 18.x 以降](https://nodejs.org/) （Azure Functions Core Toolsのインストールに必要）
 - [Azure アカウント](https://azure.microsoft.com/ja-jp/)
@@ -147,12 +150,15 @@ foundry-claude-durable-functions/
 1. [Azureポータル](https://portal.azure.com)にアクセス
 2. 「リソースの作成」→「ストレージアカウント」を検索
 3. 基本設定:
-   - **ストレージアカウント名**: 一意の名前（例: `testgenprogress`）
-   - **地域**: Function Appと同じリージョン推奨
+   - **ストレージアカウント名**: 一意の名前（例: `poctestgenstorage`）
+   - **地域**: East US 2など
    - **パフォーマンス**: Standard
    - **冗長性**: ローカル冗長ストレージ (LRS)
 4. 「確認および作成」→「作成」
-5. 作成後、「アクセスキー」→「キーの表示」→ **key1**の「接続文字列」をメモ（後で`.env`, `.local.settings.json`に設定）
+5. 作成後、「アクセスキー」→「キーの表示」→ **key1**の「接続文字列」をメモ
+   - **用途**: `.env`の`AZURE_STORAGE_CONNECTION_STRING`に設定
+
+**注**: Durable Functions状態管理用のStorage Accountは、後述の「バックエンド（Azure Functions）のデプロイ」時にVS Code Azure Toolsが自動作成します。
 
 ---
 
@@ -164,6 +170,14 @@ foundry-claude-durable-functions/
 node --version  # Node.jsがインストールされていることを確認
 npm install -g azure-functions-core-tools@4 --unsafe-perm true
 func --version  # インストール確認
+```
+
+#### Azurite（ローカルストレージエミュレータ）
+
+ローカル開発時のDurable Functions状態管理に使用します。
+
+```bash
+npm install -g azurite
 ```
 
 #### Visual Studio Code 拡張機能
@@ -228,7 +242,8 @@ MODEL_TEST_PERSPECTIVES=claude-sonnet-4-5
 MODEL_TEST_SPEC=claude-sonnet-4-5
 MODEL_DIFF_DETECTION=claude-sonnet-4-5
 
-# Azure Storage 接続情報
+# Azure Storage 接続情報（進捗管理・成果物保存用）
+# 上記で作成した1つ目のStorage Account（例: poctestgenstorage）の接続文字列
 AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
 ```
 
@@ -240,7 +255,7 @@ AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
 {
     "IsEncrypted": false,
     "Values": {
-        "AzureWebJobsStorage": "<Azure Storage接続文字列>",
+        "AzureWebJobsStorage": "UseDevelopmentStorage=true",
         "FUNCTIONS_WORKER_RUNTIME": "python",
         "AzureWebJobsSecretStorageType": "files"
     },
@@ -251,11 +266,31 @@ AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
 }
 ```
 
-**重要**: `AzureWebJobsStorage`には、上記で取得したAzure Storageの接続文字列を設定してください。
+**ローカル開発時の`AzureWebJobsStorage`設定:**
+
+- **初回（Azurite使用）**: `"UseDevelopmentStorage=true"`
+  - Azuriteを起動してから`func start`
+  - コスト不要、オフライン開発可能
+  
+- **Azure Storage使用（オプション）**: 上記で作成したStorage Account（例: poctestgenstorage）の接続文字列
+  - ローカル開発でもクラウドストレージを使用（課金発生）
+  
+- **デプロイ後**: VS Code Azure Toolsが自動作成したStorage Account（例: claudefunc）の接続文字列に変更可能
+  - 本番環境と同じストレージを使用する場合
 
 ---
 
 ## ローカルでの実行
+
+### 1. Azuriteの起動
+
+新しいターミナルウィンドウで以下を実行（起動したまま）:
+
+```bash
+azurite --silent --location c:\azurite --debug c:\azurite\debug.log
+```
+
+### 2. Functions Appの起動
 
 ```bash
 func start
@@ -263,7 +298,8 @@ func start
 
 起動後、`http://localhost:7071/api/upload` が利用可能になります。
 
-フロントエンドの起動:
+### 3. フロントエンドの起動
+
 1. `frontend/index.html`を右クリック
 2. 「Open with Live Server」を選択
 3. ブラウザでExcelファイルをアップロード
@@ -317,11 +353,11 @@ func start
 2. **Static Web Appの作成**
    - VS Codeのサイドバーの「Azure」アイコンをクリック（Azure Tools拡張機能が必要）
    - 「Static Web Apps」を右クリック→「Create Static Web App (Advanced)...」を選択
-   - アプリ名、リージョン、GitHubリポジトリを選択
-   - ビルド設定:
+   - リソースグループ、アプリ名、**Free**プラン、リージョン、GitHubリポジトリを選択
+   - ビルド設定（**Custom**）:
      - **App location**: `/frontend`
      - **Api location**: 空欄
-     - **Output location**: `/frontend`
+     - **Output location**: 空欄
 
 3. **デプロイ**
    - GitHub Actionsが自動でトリガーされ、デプロイが実行されます
@@ -447,7 +483,7 @@ GPT系モデルを利用したアプリケーションの実行基盤。Claude�
 1. Azure Portal → Function App（例: `claude-func`）を開く
 2. 「概要」タブで関数一覧を確認
 3. 確認したい関数を選択（例: `process_test_generation`）
-4. 「呼び出しなど」をクリック
+4. 上部タブ「呼び出し」に移動
 5. 過去の実行履歴が一覧表示される
    - 実行日時、ステータス（成功/失敗）、実行時間を確認可能
    - 各実行をクリックすると詳細ログを確認可能
@@ -456,7 +492,7 @@ GPT系モデルを利用したアプリケーションの実行基盤。Claude�
 
 1. Azure Portal → Function App → 「概要」タブ
 2. 確認したい関数を選択（例: `process_test_generation`）
-3. 上部タブ「コードとテスト」→「呼び出し」→「ログ」タブに移動
+3. 上部タブ「ログ」に移動
 4. 現在実行中の処理のリアルタイムログが表示される
 
 **注**: ログは実行中のみ表示されます。過去のログは「呼び出しなど」から確認してください。
