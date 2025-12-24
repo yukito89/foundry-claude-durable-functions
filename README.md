@@ -1,4 +1,4 @@
-# 詳細設計書をもとに単体テスト仕様書自動生成アプリケーション
+# 単体テスト仕様書自動生成アプリケーション
 
 このアプリケーションは、Excel形式の設計書をアップロードすると、LLM（大規模言語モデル）を利用して構造化された設計書、テスト観点、そして単体テスト仕様書を自動生成するAzure Functionsアプリケーションです。
 
@@ -13,7 +13,7 @@
 - 生成されたMarkdownを`単体テスト仕様書.xlsx`テンプレートに書き込みます。
 - 最終的な成果物（構造化設計書.md, テスト観点.md, テスト仕様書.md, テスト仕様書.xlsx）をZIPファイルにまとめてBlob Storageに保存します。
 - **リアルタイム進捗表示**: Azure Blob Storageを利用し、処理の進捗状況をUIに10秒間隔で反映します。
-- **処理履歴管理**: 過去の処理結果を一覧表示し、1日間いつでもダウンロード可能です。ブラウザを閉じても結果を取得できます。
+- **処理履歴管理**: 過去の処理結果を一覧表示し、いつでもダウンロード可能です。ブラウザを閉じても結果を取得できます。
 
 ---
 
@@ -21,12 +21,11 @@
 
 - [アーキテクチャ構成](#アーキテクチャ構成)
 - [前提条件](#前提条件)
-- [環境構築](#環境構築)
-- [設定](#設定)
+- [環境構築・設定](#環境構築・設定)
 - [ローカルでの実行](#ローカルでの実行)
 - [Azureへのデプロイ](#azureへのデプロイ)
-- [進捗表示機能](#進捗表示機能)
-- [主要ファイル構成](#主要ファイル構成)
+- [Azure Portal上の構成](#azure-portal上の構成)
+- [運用・監視](#運用・監視)
 - [使用技術一覧](#使用技術一覧)
 
 ---
@@ -83,7 +82,7 @@
 ### モジュール構成
 
 ```
-testgen-unit-diff/
+foundry-claude-durable-functions/
 ├── function_app.py          # Durable Functions定義
 ├── core/                    # ビジネスロジック層
 │   ├── normal_mode.py       # 通常モード処理
@@ -129,11 +128,37 @@ testgen-unit-diff/
 
 ---
 
-## 環境構築
+## 環境構築・設定
 
-### 1. Azure Functions Core Toolsのインストール
+### 1. Azureリソースの作成
 
-**npm経由でインストール（推奨）:**
+#### Azure AI Foundryの設定
+
+1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
+2. 新しいプロジェクトを作成
+3. 「Models + endpoints」→「+ Deploy model」
+4. 以下のモデルをデプロイ:
+   - **Claude Haiku 4.5**: 構造化処理用（デプロイ名: `claude-haiku-4-5`）
+   - **Claude Sonnet 4.5**: テスト観点抽出・テスト仕様書生成・差分検知用（デプロイ名: `claude-sonnet-4-5`）
+5. 各モデルのエンドポイントURLとAPIキーをメモ（後で`.env`に設定）
+
+#### Azure Storage Accountの作成
+
+1. [Azureポータル](https://portal.azure.com)にアクセス
+2. 「リソースの作成」→「ストレージアカウント」を検索
+3. 基本設定:
+   - **ストレージアカウント名**: 一意の名前（例: `testgenprogress`）
+   - **地域**: Function Appと同じリージョン推奨
+   - **パフォーマンス**: Standard
+   - **冗長性**: ローカル冗長ストレージ (LRS)
+4. 「確認および作成」→「作成」
+5. 作成後、「アクセスキー」→「キーの表示」→ **key1**の「接続文字列」をメモ（後で`.env`, `.local.settings.json`に設定）
+
+---
+
+### 2. 開発ツールのインストール
+
+#### Azure Functions Core Tools
 
 ```bash
 node --version  # Node.jsがインストールされていることを確認
@@ -141,30 +166,32 @@ npm install -g azure-functions-core-tools@4 --unsafe-perm true
 func --version  # インストール確認
 ```
 
-### 2. Visual Studio Code 拡張機能のインストール
+#### Visual Studio Code 拡張機能
 
 以下の拡張機能をインストールしてください:
 
-#### Azure Tools (Microsoft)
+**Azure Tools (Microsoft)**
 - VS Codeの拡張機能タブ（Ctrl+Shift+X）を開く
 - 「Azure Tools」で検索
 - Microsoft発行の「Azure Tools」をインストール
 - 用途: Azure Functionsのデプロイ・管理
 
-#### Python (Microsoft)
+**Python (Microsoft)**
 - 「Python」で検索
 - Microsoft発行の「Python」をインストール
 - 用途: Pythonコードの実行・デバッグ
 
-#### Pylance (Microsoft)
+**Pylance (Microsoft)**
 - 「Pylance」で検索
 - Microsoft発行の「Pylance」をインストール
 - 用途: Python言語サーバー（コード補完・型チェック）
 
-#### Live Server (Ritwick Dey)
+**Live Server (Ritwick Dey)**
 - 「Live Server」で検索
 - Ritwick Dey発行の「Live Server」をインストール
 - 用途: フロントエンドのローカルプレビュー（右クリック→「Open with Live Server」）
+
+---
 
 ### 3. プロジェクトのセットアップ
 
@@ -176,7 +203,36 @@ py -3.11 -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 4. local.settings.jsonの作成
+---
+
+### 4. 環境変数の設定
+
+#### .envファイルの作成
+
+`.env.example`をコピーして`.env`を作成:
+
+```bash
+copy .env.example .env
+```
+
+`.env`ファイルに以下を設定:
+
+```env
+# Azure AI Foundry (Claude) 接続情報
+AZURE_FOUNDRY_API_KEY=<APIキー>
+AZURE_FOUNDRY_ENDPOINT=<エンドポイントURL>
+
+# モデル選択
+MODEL_STRUCTURING=claude-haiku-4-5
+MODEL_TEST_PERSPECTIVES=claude-sonnet-4-5
+MODEL_TEST_SPEC=claude-sonnet-4-5
+MODEL_DIFF_DETECTION=claude-sonnet-4-5
+
+# Azure Storage 接続情報
+AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
+```
+
+#### local.settings.jsonの作成
 
 プロジェクトルートに`local.settings.json`を作成:
 
@@ -195,64 +251,7 @@ pip install -r requirements.txt
 }
 ```
 
-**重要**: `AzureWebJobsStorage`には、[設定](#設定)セクションで取得したAzure Storageの接続文字列を設定してください。
-
----
-
-## 設定
-
-### 1. Azure AI Foundryの設定
-
-1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
-2. 新しいプロジェクトを作成
-3. 「Models + endpoints」→「+ Deploy model」
-4. 「Claude Sonnet 4.5」を検索して選択
-5. デプロイ名を設定（例: `claude-sonnet-4-5`）
-6. エンドポイントURLとAPIキーをメモ（後で`.env`に設定）
-
-### 2. Azure Storage Accountの作成
-
-#### ストレージアカウントの作成
-
-1. [Azureポータル](https://portal.azure.com)にアクセス
-2. 「リソースの作成」→「ストレージアカウント」を検索
-3. 基本設定:
-   - **ストレージアカウント名**: 一意の名前（例: `testgenprogress`）
-   - **地域**: Function Appと同じリージョン推奨
-   - **パフォーマンス**: Standard
-   - **冗長性**: ローカル冗長ストレージ (LRS)
-4. 「確認および作成」→「作成」
-
-#### 接続文字列の取得
-
-1. 作成したストレージアカウントを開く
-2. 「アクセスキー」→「キーの表示」
-3. **key1**の「接続文字列」をコピー
-
-### 3. .envファイルの設定
-
-`.env.example`をコピーして`.env`を作成:
-
-```bash
-copy .env.example .env
-```
-
-`.env`ファイルに以下を設定:
-
-```env
-# Azure AI Foundry (Claude) 接続情報
-AZURE_FOUNDRY_API_KEY=<APIキー>
-AZURE_FOUNDRY_ENDPOINT=<エンドポイントURL>
-
-# モデル選択
-MODEL_STRUCTURING=claude-sonnet-4-5
-MODEL_TEST_PERSPECTIVES=claude-sonnet-4-5
-MODEL_TEST_SPEC=claude-sonnet-4-5
-MODEL_DIFF_DETECTION=claude-sonnet-4-5
-
-# Azure Storage 接続情報
-AZURE_STORAGE_CONNECTION_STRING=<接続文字列>
-```
+**重要**: `AzureWebJobsStorage`には、上記で取得したAzure Storageの接続文字列を設定してください。
 
 ---
 
@@ -289,13 +288,13 @@ func start
 1. **Function Appの作成**
    - VS Codeのサイドバーの「Azure」アイコンをクリック（Azure Tools拡張機能が必要）
    - 「Functions」を右クリック→「Create Function App in Azure」を選択
-   - アプリ名、Pythonバージョン（**3.11**）、リージョンを指定
+   - アプリ名、Pythonバージョン（**3.11**）、リージョン、認証方法で**Secrets**を指定
 
-2. **デプロイ**
+1. **デプロイ**
    - 作成したFunction Appを右クリック
    - 「Deploy to Function App...」を選択
 
-3. **環境変数の設定**
+2. **環境変数の設定**
    - Azureポータルで作成したFunction Appを開く
    - 「設定」→「環境変数」→「+追加」
    - 以下の環境変数を追加:
@@ -312,7 +311,7 @@ func start
 
 1. **エンドポイントURLの確認と変更**
    - AzureポータルでデプロイしたFunction Appを開く
-   - 「概要」ページの「URL」をコピー（例: `https://your-function-app.azurewebsites.net`）
+   - 「概要」ページの「URL」をコピー（例: `https://<your-function-app>.azurewebsites.net`）
    - `frontend/script.js`と`frontend/history.js`の`API_BASE_URL`をコピーしたURLに変更
 
 2. **Static Web Appの作成**
@@ -329,96 +328,161 @@ func start
 
 ---
 
-## 進捗表示機能
+## Azure Portal上の構成
 
-### 概要
-Azure Blob Storageを利用して、バックエンドの処理進捗をリアルタイムでUIに反映します。フロントエンドは10秒間隔でポーリングを行い、進捗状況を取得します。
+本アプリケーションは、以下の3つのリソースグループで構成されています。
 
-### 進捗ステージ
+### 1. Claude系モデル用リソースグループ（claudefunc）
 
-| ステージ | 進捗率 | 表示メッセージ |
-|---------|--------|---------------|
-| structuring | 10% | 📄 設計書を構造化中... |
-| diff | 30% | 🔍 差分を検知中... (差分モードのみ) |
-| perspectives | 40-50% | 💡 テスト観点を抽出中... |
-| testspec | 70% | 📝 テスト仕様書を生成中... |
-| converting | 90% | 🔄 成果物を変換中... |
-| completed | 100% | ✅ 完了しました |
+Claude系モデルを利用したアプリケーションの実行基盤。Functions、Static Web Apps、監視・ログ基盤を含みます。
 
-### Blob Storage コンテナ構成
+#### 含まれるリソース
 
-以下のコンテナが自動作成されます:
+| リソース名 | 種類 | リージョン | 用途 |
+|-----------|------|-----------|------|
+| claude-func | Function App | Canada Central | Claude系モデルを利用するDurable Functions実行 |
+| claude-static | Static Web App | East US 2 | フロントエンドのホスティング |
+| claudefunc | Application Insights | Canada Central | アプリケーション監視 |
+| claudefunc | Storage Account | Canada Central | Functions状態管理（`azure-webjobs-hosts`コンテナ含む） |
+| FLEX-claude-func-2ab4 | App Service Plan (Flex) | Canada Central | Function App実行プラン |
+| workspace-claudefunc | Log Analytics Workspace | Canada Central | ログ集約・分析 |
+
+#### CI/CD
+
+- **フロントエンド**: GitHub Actions経由で自動デプロイ（`.github/workflows/`）
+- **バックエンド**: VS Code Azure Tools拡張機能から手動デプロイ
+
+---
+
+### 2. GPT系モデル用リソースグループ（pocfunc）
+
+GPT系モデルを利用したアプリケーションの実行基盤。Claude系と同様の構成で独立運用。
+
+#### 含まれるリソース
+
+| リソース名 | 種類 | リージョン | 用途 |
+|-----------|------|-----------|------|
+| poc-func | Function App | East US | GPT系モデルを利用するDurable Functions実行 |
+| poc-static | Static Web App | East US 2 | フロントエンドのホスティング |
+| pocfunc | Application Insights | East US | アプリケーション監視 |
+| pocfunc | Storage Account | East US | Functions状態管理（`azure-webjobs-hosts`コンテナ含む） |
+| FLEX-poc-func-c1d1 | App Service Plan (Flex) | East US | Function App実行プラン |
+| workspace-pocfunc | Log Analytics Workspace | East US | ログ集約・分析 |
+| Application Insights Smart Detection | Action Group | Global | 異常検知アラート |
+
+---
+
+### 3. 進捗管理・成果物保存・モデルデプロイ用リソースグループ（poc-rg）
+
+プロジェクト成果物の保存とモデルデプロイを担う共通基盤。Claude/GPT両系統で共有。
+
+#### 含まれるリソース
+
+| リソース名 | 種類 | リージョン | 用途 |
+|-----------|------|-----------|------|
+| poctestgenstorage | Storage Account | East US 2 | 成果物ZIP・進捗情報・アップロードファイル保存 |
+| sampleaifoundry-20251211 | Azure AI Foundry | East US 2 | モデルデプロイ・評価・実験管理 |
+| firstProject | AI Foundry Project | East US 2 | Claude/GPTモデル管理・プロジェクト実験スペース |
+
+#### ストレージコンテナ構成
+
+**共通基盤ストレージ（poctestgenstorage）:**
 
 | コンテナ名 | 用途 | ライフサイクル |
 |-----------|------|---------------|
 | `temp-uploads` | 入力ファイル一時保存 | 手動削除推奨 |
 | `results` | 生成結果のZIPファイル | 手動削除推奨 |
 | `progress` | 進捗情報 | 自動上書き |
+
+**Function App専用ストレージ（claudefunc / pocfunc）:**
+
+| コンテナ名 | 用途 | ライフサイクル |
+|-----------|------|---------------|
 | `azure-webjobs-hosts` | Durable Functions制御情報 | 自動管理 |
 
-### ライフサイクル管理（推奨）
+**注**: `azure-webjobs-hosts`コンテナは各Function App専用のStorage Account（claudefunc / pocfunc）内に作成され、Durable Functionsの状態管理に使用されます。
+
+#### ライフサイクル管理（推奨）
 
 古いファイルを自動削除してストレージコストを削減:
 
 **Azure Portal → Storage Account → データ管理 → ライフサイクル管理**
 
-```json
-{
-  "rules": [{
-    "name": "cleanup-temp-files",
-    "enabled": true,
-    "definition": {
-      "filters": {
-        "prefixMatch": ["temp-uploads/", "results/"]
-      },
-      "actions": {
-        "baseBlob": {
-          "delete": {"daysAfterModificationGreaterThan": 1}
-        }
-      }
-    }
-  }]
-}
+---
+
+### リソースグループ間の関係
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  共通基盤RG（進捗管理・成果物保存・モデルデプロイ）             │
+│  ┌──────────────────┐  ┌──────────────────────────────┐     │
+│  │ poctestgenstorage│  │ Azure AI Foundry (firstProject)│   │
+│  │ - temp-uploads   │  │ - Claude Sonnet 4.5          │     │
+│  │ - results        │  │ - GPT-5.2                    │     │
+│  │ - progress       │  └──────────────────────────────┘     │
+│  └──────────────────┘                                       │
+└─────────────────────────────────────────────────────────────┘
+         ↑                              ↑
+         │                              │
+    ┌────┴────┐                    ┌────┴────┐
+    │         │                    │         │
+┌───┴─────────┴───────────┐   ┌────┴─────────┴───────────┐
+│ Claude系RG               │  │ GPT系RG                   │
+│ - claude-func            │  │ - poc-func                │
+│ - claude-static          │  │ - poc-static              │
+│ - claudefunc (Storage)   │  │ - pocfunc (Storage)       │
+│   └ azure-webjobs-hosts  │  │   └ azure-webjobs-hosts   │
+│ - 監視・ログ基盤          │  │ - 監視・ログ基盤           │
+└──────────────────────────┘  └───────────────────────────┘
 ```
 
 ---
 
-## パフォーマンス特性
+## 運用・監視
 
-### 処理時間の内訳（例）
+### Function Appのログ確認
 
-| 処理 | 時間 | 備考 |
-|------|------|------|
-| HTTP応答 | 3~5秒 | ✅ 230秒制限を完全回避 |
-| Excel解析 | 10秒 | シート数に依存 |
-| LLM呼び出し（構造化） | 30秒 | トークン数に依存 |
-| LLM呼び出し（テスト観点） | 30秒 | トークン数に依存 |
-| LLM呼び出し（テスト仕様書） | 60秒 | トークン数に依存 |
-| Excel/CSV変換 | 5秒 | テストケース数に依存 |
-| **合計** | **約135秒** | **HTTP応答とは無関係** |
+#### 過去の実行結果の確認
 
-### スケーラビリティ
+1. Azure Portal → Function App（例: `claude-func`）を開く
+2. 「概要」タブで関数一覧を確認
+3. 確認したい関数を選択（例: `process_test_generation`）
+4. 「呼び出しなど」をクリック
+5. 過去の実行履歴が一覧表示される
+   - 実行日時、ステータス（成功/失敗）、実行時間を確認可能
+   - 各実行をクリックすると詳細ログを確認可能
 
-- **同時実行数**: Premium/Flexプランで自動スケール
-- **最大実行時間**: 無制限（Premium/Flex/Dedicated）
-- **ファイルサイズ制限**: Blob Storage経由のため実質無制限
+#### リアルタイムログの確認
+
+1. Azure Portal → Function App → 「概要」タブ
+2. 確認したい関数を選択（例: `process_test_generation`）
+3. 上部タブ「コードとテスト」→「呼び出し」→「ログ」タブに移動
+4. 現在実行中の処理のリアルタイムログが表示される
+
+**注**: ログは実行中のみ表示されます。過去のログは「呼び出しなど」から確認してください。
 
 ---
 
-## 主要ファイル構成
+### コストの確認
 
-- **`function_app.py`**: Durable Functions定義（Starter, Orchestrator, Activity）
-- **`requirements.txt`**: Pythonの依存パッケージリスト
-- **`.env.example`**: 環境変数のテンプレートファイル
-- **`host.json`**: Azure Functionsホストのグローバル設定ファイル
-- **`local.settings.json`**: ローカル開発環境専用の設定ファイル（`.gitignore`で除外済み）
-- **`単体テスト仕様書.xlsx`**: テスト仕様書を生成する際の書き込み先テンプレートExcelファイル
-- **`frontend/`**: フロントエンドファイル
-  - `index.html`: メインページ（ファイルアップロード）
-  - `history.html`: 処理履歴ページ
-  - `script.js`: メインページのロジック
-  - `history.js`: 履歴ページのロジック
-  - `style.css`: 共通スタイル
+#### スポンサープランでのコスト確認
+
+1. Azure Portal → 「コスト管理と請求」
+2. 左サイドバー「Cost Management」を選択
+3. 「スポンサー サブスクリプションは Cost Management では現在利用できません」と表示される
+4. 「スポンサー ポータルを使用してください」のリンクまたはボタンをクリック
+5. スポンサープランポータルに移動してコストを確認
+
+**注**: スポンサープランの場合、Azure Portal標準のコスト管理機能は使用できません。
+
+#### 主なコスト発生リソース
+
+| Service Name | 料金体系 | 概算コスト |
+|-------------|---------|-----------|
+| Foundry Models | トークン使用量 | モデル・使用量により変動 |
+| Functions | 実行時間・メモリ使用量 | 従量課金（使用量に応じて変動） |
+| Storage | ストレージ容量・トランザクション | 約￥2-3/GB/月 + トランザクション費用 |
+| Log Analytics | データ取り込み量 | 最初の5GB/月は無料、以降約￥300/GB |
 
 ---
 
