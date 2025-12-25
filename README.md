@@ -133,53 +133,7 @@ foundry-claude-durable-functions/
 
 ## 環境構築・設定
 
-### 1. Azureリソースの作成
-
-#### Azure AI Foundryの設定
-
-**新しいプロジェクトの作成:**
-
-1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
-2. 画面上部の「Microsoft Foundry」または既存プロジェクト名（例: `firstProject`）をクリック
-3. 表示されるドロップダウンメニューから「**+ 新規作成**」ボタンをクリック
-4. プロジェクト作成画面で以下を入力:
-   - **プロジェクト名**: 任意の名前（例: `testgen-project`）
-   - **リソースグループ**: 既存のものを選択または新規作成（例: `poc-rg`）
-   - **リージョン**: East US 2など
-5. 「作成」をクリック
-
-**モデルのデプロイ:**
-
-6. 作成したプロジェクトの画面で、左サイドバーから「**Models + endpoints**」を選択
-7. 「**+ Deploy model**」→「**Deploy base model**」をクリック
-8. 以下のモデルを順番にデプロイ:
-   - **Claude Haiku 4.5**: 構造化処理用
-     - デプロイ名: `claude-haiku-4-5`
-   - **Claude Sonnet 4.5**: テスト観点抽出・テスト仕様書生成・差分検知用
-     - デプロイ名: `claude-sonnet-4-5`
-9. デプロイ完了後、各モデルをクリックして以下をメモ:
-   - **Target URI**（エンドポイントURL）
-   - **Key**（APIキー）
-   - これらは後で`.env`ファイルに設定します
-
-#### Azure Storage Accountの作成
-
-1. [Azureポータル](https://portal.azure.com)にアクセス
-2. 「リソースの作成」→「ストレージアカウント」を検索
-3. 基本設定:
-   - **ストレージアカウント名**: 一意の名前（例: `poctestgenstorage`）
-   - **地域**: East US 2など
-   - **パフォーマンス**: Standard
-   - **冗長性**: ローカル冗長ストレージ (LRS)
-4. 「確認および作成」→「作成」
-5. 作成後、「アクセスキー」→「キーの表示」→ **key1**の「接続文字列」をメモ
-   - **用途**: `.env`の`AZURE_STORAGE_CONNECTION_STRING`に設定
-
-**注**: Durable Functions状態管理用のStorage Accountは、後述の「バックエンド（Azure Functions）のデプロイ」時にVS Code Azure Toolsが自動作成します。
-
----
-
-### 2. 開発ツールのインストール
+### 1. 開発ツールのインストール
 
 #### Azure Functions Core Tools
 
@@ -224,7 +178,7 @@ npm install -g azurite
 
 ---
 
-### 3. プロジェクトのセットアップ
+### 2. プロジェクトのセットアップ
 
 ```bash
 git clone <リポジトリのURL>
@@ -233,6 +187,52 @@ py -3.11 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+---
+
+### 3. Azureリソースの作成
+
+#### Azure AI Foundryの設定
+
+**新しいプロジェクトの作成:**
+
+1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
+2. 画面上部の「Microsoft Foundry」または既存プロジェクト名（例: `firstProject`）をクリック
+3. 表示されるドロップダウンメニューから「**+ 新規作成**」ボタンをクリック
+4. プロジェクト作成画面で以下を入力:
+   - **プロジェクト名**: 任意の名前（例: `testgen-project`）
+   - **リソースグループ**: 既存のものを選択または新規作成（例: `poc-rg`）
+   - **リージョン**: East US 2など
+5. 「作成」をクリック
+
+**モデルのデプロイ:**
+
+6. 作成したプロジェクトの画面で、左サイドバーから「**Models + endpoints**」を選択
+7. 「**+ Deploy model**」→「**Deploy base model**」をクリック
+8. 以下のモデルを順番にデプロイ:
+   - **Claude Haiku 4.5**: 構造化処理用
+     - デプロイ名: `claude-haiku-4-5`
+   - **Claude Sonnet 4.5**: テスト観点抽出・テスト仕様書生成・差分検知用
+     - デプロイ名: `claude-sonnet-4-5`
+9. デプロイ完了後、各モデルをクリックして以下をメモ:
+   - **Target URI**（エンドポイントURL）
+   - **Key**（APIキー）
+   - これらは後で`.env`ファイルに設定します
+
+#### Azure Storage Accountの作成
+
+1. [Azureポータル](https://portal.azure.com)にアクセス
+2. 「リソースの作成」→「ストレージアカウント」を検索
+3. 基本設定:
+   - **ストレージアカウント名**: 一意の名前（例: `poctestgenstorage`）
+   - **地域**: East US 2など
+   - **パフォーマンス**: Standard
+   - **冗長性**: ローカル冗長ストレージ (LRS)
+4. 「確認および作成」→「作成」
+5. 作成後、「アクセスキー」→「キーの表示」→ **key1**の「接続文字列」をメモ
+   - **用途**: `.env`の`AZURE_STORAGE_CONNECTION_STRING`に設定
+
+**注**: Durable Functions状態管理用のStorage Accountは、後述の「バックエンド（Azure Functions）のデプロイ」時にVS Code Azure Toolsが自動作成します。
 
 ---
 
