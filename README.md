@@ -137,13 +137,30 @@ foundry-claude-durable-functions/
 
 #### Azure AI Foundryの設定
 
+**新しいプロジェクトの作成:**
+
 1. [Azure AI Foundry](https://ai.azure.com/)にアクセス
-2. 新しいプロジェクトを作成
-3. 「Models + endpoints」→「+ Deploy model」
-4. 以下のモデルをデプロイ:
-   - **Claude Haiku 4.5**: 構造化処理用（デプロイ名: `claude-haiku-4-5`）
-   - **Claude Sonnet 4.5**: テスト観点抽出・テスト仕様書生成・差分検知用（デプロイ名: `claude-sonnet-4-5`）
-5. 各モデルのエンドポイントURLとAPIキーをメモ（後で`.env`に設定）
+2. 画面上部の「Microsoft Foundry」または既存プロジェクト名（例: `firstProject`）をクリック
+3. 表示されるドロップダウンメニューから「**+ 新規作成**」ボタンをクリック
+4. プロジェクト作成画面で以下を入力:
+   - **プロジェクト名**: 任意の名前（例: `testgen-project`）
+   - **リソースグループ**: 既存のものを選択または新規作成（例: `poc-rg`）
+   - **リージョン**: East US 2など
+5. 「作成」をクリック
+
+**モデルのデプロイ:**
+
+6. 作成したプロジェクトの画面で、左サイドバーから「**Models + endpoints**」を選択
+7. 「**+ Deploy model**」→「**Deploy base model**」をクリック
+8. 以下のモデルを順番にデプロイ:
+   - **Claude Haiku 4.5**: 構造化処理用
+     - デプロイ名: `claude-haiku-4-5`
+   - **Claude Sonnet 4.5**: テスト観点抽出・テスト仕様書生成・差分検知用
+     - デプロイ名: `claude-sonnet-4-5`
+9. デプロイ完了後、各モデルをクリックして以下をメモ:
+   - **Target URI**（エンドポイントURL）
+   - **Key**（APIキー）
+   - これらは後で`.env`ファイルに設定します
 
 #### Azure Storage Accountの作成
 
