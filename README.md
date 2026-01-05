@@ -360,6 +360,28 @@ func start
      - `AZURE_STORAGE_CONNECTION_STRING`
      - **`AzureWebJobsStorage`** ← デプロイ時に自動設定済み
 
+3. **CORS設定**
+   - Function Appの「設定」→「CORS」を開く
+   - 「許可されたオリジン」に以下を追加:
+     - Static Web AppのURL（例: `https://<your-static-app>.azurestaticapps.net`）
+   - 「保存」をクリック
+
+4. **IPアドレス制限（オプション）**
+   - Function Appの「設定」→「ネットワーク」を開く
+   - 「受信トラフィック」セクションの「アクセス制限」をクリック
+   - 「+ルールの追加」を選択
+   - 以下を設定:
+     - **名前**: 社内ネットワーク
+     - **優先度**: 100
+     - **種類**: IPv4
+     - **IPアドレスブロック**: 社内のIPアドレス範囲（例: `203.0.113.0/32`）
+     - **アクション**: 許可
+   - Static Web Appからのアクセスも許可する場合、追加ルールを作成
+   - 「保存」をクリック
+
+**注**: IPアドレス制限を設定すると、指定したIPアドレス以外からのアクセスが拒否されます。Static Web Appからのアクセスも考慮してください。
+
+
 ### フロントエンド（Azure Static Web Apps）のデプロイ
 
 1. **エンドポイントURLの確認と変更**
